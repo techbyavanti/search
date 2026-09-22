@@ -5,21 +5,21 @@ A Java service for semantic product search over the [WANDS](https://github.com/w
 thing: **retrieval and ranking quality** — hybrid lexical/semantic search plus
 cross-encoder reranking, proven with real offline IR evaluation (nDCG, MRR,
 Recall@k) rather than eyeballed results. Sibling portfolio project to
-[`recommendation-engine`](https://github.com/avantiwhenever/recommendation-engine)
+[`recommendation-engine`](https://github.com/techbyavanti/recommendation-engine)
 (a React + GraphQL recommendation engine over the same catalog) — that one
 explores a different problem (personalized re-ranking) and a more
 service-oriented stack; this one goes deep on one thing instead: proving each
 stage of a ranking pipeline actually improves search quality, with the
 numbers to back it up.
 
-> **[Live snapshot demo →](https://avantiwhenever.github.io/search/)** — a
+> **[Live snapshot demo →](https://techbyavanti.github.io/search/)** — a
 > few real, captured queries comparing all six strategies side by side
 > (static GitHub Pages page, not a live backend — [run it yourself](HOWTO.md)
 > for the real thing).
 
 ## Where to go
 
-**Recruiter, skimming this?** The [live demo](https://avantiwhenever.github.io/search/)
+**Recruiter, skimming this?** The [live demo](https://techbyavanti.github.io/search/)
 is the fastest path — six ranking strategies on a real 43,000-product
 catalog, side by side, with real precision/recall numbers instead of a
 handful of cherry-picked examples.
