@@ -1,0 +1,4 @@
+id	query_id	product_id	label
+0	0	0	Exact
+1	0	1	Irrelevant
+2	1	1	Partial

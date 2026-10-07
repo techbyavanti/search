@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Root reactor pom.xml manages versions for every module (search-common,
+  # search-inference, search-retrieval, search-ingestion, search-api,
+  # search-eval) via dependencyManagement, so one entry at "/" covers all six.
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      maven-patch-minor:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: "/search-api"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

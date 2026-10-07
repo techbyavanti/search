@@ -1,0 +1,50 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.3
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.4.3
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  search-api:
+    build:
+      context: .
+      dockerfile: search-api/Dockerfile
+    environment:
+      - SEARCH_ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - SEARCH_MODELS_EMBEDDING_DIR=/models/bge-small-en-v1.5
+      - SEARCH_MODELS_RERANKER_DIR=/models/ms-marco-MiniLM-L-6-v2
+      - SEARCH_MODELS_NEURAL_RERANKER_DIR=/models/neural-reranker
+      - SEARCH_MODELS_LEARNED_TOWER_DIR=/models/learned-shared-tower
+    ports:
+      - "8080:8080"
+    volumes:
+      # Pre-downloaded via scripts/download-models.sh — mounted rather than baked
+      # into the image so rebuilding the app image doesn't re-fetch ~150MB of weights.
+      - ./models:/models:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+volumes:
+  es-data:

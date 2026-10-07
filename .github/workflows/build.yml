@@ -1,0 +1,151 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 26
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '26'
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-
+
+      - name: Run unit tests
+        run: mvn -B test
+
+  # --- Software Composition Analysis: known CVEs in resolved Maven dependencies ---
+  cve-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan Maven dependencies for known CVEs
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '1'
+          format: table
+
+      # Non-blocking: same scan, SARIF format, surfaced in the repo's Security
+      # tab alongside Dependabot alerts rather than only living in CI logs.
+      - name: Re-run as SARIF for the Security tab
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: trivy-deps.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: trivy-deps.sarif
+          category: trivy-deps
+
+  # --- SAST: Java source, not just its dependencies ---
+  sast:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep (Java security rules)
+        run: semgrep scan --config p/java --config p/security-audit --config p/secrets --metrics=off --error
+      - name: Re-run as SARIF for the Security tab
+        if: always()
+        run: semgrep scan --config p/java --config p/security-audit --config p/secrets --metrics=off --sarif --output semgrep.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # --- Secret detection: block committed credentials before they land in an image layer ---
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- Dockerfile lint: catch misconfigurations (missing USER, unpinned base, etc.) ---
+  docker-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.4.0
+        with:
+          dockerfile: search-api/Dockerfile
+
+  # --- Build the real runtime image and scan it for OS/JRE-level CVEs before it
+  #     would ever reach a registry. ---
+  docker-image-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build search-api image
+        run: docker build -f search-api/Dockerfile -t search-api:${{ github.sha }} .
+
+      - name: Scan image for OS/JRE CVEs
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: search-api:${{ github.sha }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          format: table
+
+      - name: Re-run as SARIF for the Security tab
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: search-api:${{ github.sha }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy-image.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: search-api:${{ github.sha }}
+          format: cyclonedx-json
+          artifact-name: search-api-sbom.cyclonedx.json

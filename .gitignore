@@ -1,0 +1,24 @@
+target/
+*.class
+dependency-reduced-pom.xml
+# Ignore .idea/'s direct children individually (rather than the whole
+# directory) so the negation below for runConfigurations/ can actually take
+# effect — git never re-includes a path whose parent directory itself was
+# excluded via a trailing-slash pattern like `.idea/`.
+.idea/*
+# Shared run configs (start/stop ES, ingest, search-api, eval, etc.) are
+# useful to everyone opening this project in IntelliJ, so track those
+# despite ignoring the rest of .idea/ (workspace.xml, caches, etc.).
+!.idea/runConfigurations/
+!.idea/runConfigurations/*.xml
+*.iml
+.vscode/
+.DS_Store
+.claude/settings.local.json
+
+dataset/
+models/
+.learned-embedding-checkpoint-*.txt
+training/.venv/
+__pycache__/
+*.pyc

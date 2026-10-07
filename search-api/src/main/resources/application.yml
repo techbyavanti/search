@@ -1,0 +1,16 @@
+server:
+  port: 8080
+
+search:
+  elasticsearch:
+    host: ${SEARCH_ELASTICSEARCH_HOST:http://localhost:9200}
+  models:
+    embedding-dir: ${SEARCH_MODELS_EMBEDDING_DIR:models/bge-small-en-v1.5}
+    reranker-dir: ${SEARCH_MODELS_RERANKER_DIR:models/ms-marco-MiniLM-L-6-v2}
+    neural-reranker-dir: ${SEARCH_MODELS_NEURAL_RERANKER_DIR:models/neural-reranker}
+    learned-tower-dir: ${SEARCH_MODELS_LEARNED_TOWER_DIR:models/learned-shared-tower}
+  hybrid:
+    rrf-k: 60
+    candidate-pool-size: 50
+  feature-cache:
+    max-size: 50000

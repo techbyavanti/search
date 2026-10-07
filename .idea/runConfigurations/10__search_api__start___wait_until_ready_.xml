@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="10. search-api (start + wait until ready)" type="CompoundRunConfigurationType">
+    <toRun name="8. search-api (app)" type="Application" />
+    <toRun name="9. Wait for search-api :8080" type="ShConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

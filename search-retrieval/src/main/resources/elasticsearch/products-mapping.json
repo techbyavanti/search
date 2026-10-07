@@ -1,0 +1,25 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "properties": {
+      "product_id":          { "type": "keyword" },
+      "product_name":        { "type": "text", "analyzer": "english",
+                                "fields": { "raw": { "type": "keyword" } } },
+      "product_class":       { "type": "text", "analyzer": "english",
+                                "fields": { "raw": { "type": "keyword" } } },
+      "category_hierarchy":  { "type": "text", "analyzer": "english" },
+      "product_description": { "type": "text", "analyzer": "english" },
+      "product_features":    { "type": "text", "analyzer": "english" },
+      "rating_count":        { "type": "integer" },
+      "average_rating":      { "type": "float" },
+      "review_count":        { "type": "integer" },
+      "embedding":           { "type": "dense_vector", "dims": 384, "index": true, "similarity": "cosine" },
+      "learned_embedding":   { "type": "dense_vector", "dims": 384, "index": true, "similarity": "cosine" }
+    }
+  }
+}

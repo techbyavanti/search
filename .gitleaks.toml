@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public WANDS catalog data baked into the GitHub Pages demo — no secrets, just product attribute key/value pairs whose repeated {\"key\":...,\"value\":...} JSON shape trips generic-api-key's entropy heuristic"
+paths = [
+  '''docs/data/product-details\.json''',
+  '''docs/index\.html''',
+]

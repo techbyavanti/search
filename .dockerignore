@@ -1,0 +1,12 @@
+target/
+*.class
+.idea/
+*.iml
+.vscode/
+.DS_Store
+.git/
+.claude/
+dataset/
+models/
+results/
+RESULTS.md
