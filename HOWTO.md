@@ -91,25 +91,46 @@ curl -sf http://localhost:9200/products/_count
 `count` should match the product row count from step 1's verification
 (~42,995).
 
+Each product's embedding is indexed twice: `embedding` (1-bit BBQ HNSW,
+Elasticsearch's default for 384 dims) and `embedding_hnsw` (float HNSW,
+m=32, ef_construction=200, used by the "Semantic HNSW (float, tuned)"
+strategy). An index built before `embedding_hnsw` was in the mapping can
+get the field without re-embedding:
+
+```bash
+curl -XPUT localhost:9200/products/_mapping -H 'Content-Type: application/json' \
+  -d '{"properties":{"embedding_hnsw":{"type":"dense_vector","dims":384,"index":true,"similarity":"cosine","index_options":{"type":"hnsw","m":32,"ef_construction":200}}}}'
+curl -XPOST 'localhost:9200/products/_update_by_query?wait_for_completion=false&slices=auto' \
+  -H 'Content-Type: application/json' \
+  -d '{"query":{"bool":{"must_not":{"exists":{"field":"embedding_hnsw"}}}},"script":{"source":"ctx._source.embedding_hnsw = ctx._source.embedding"}}'
+```
+
 ### 4. Train the neural reranker
 
 ```bash
 ./scripts/train-neural-reranker.sh
 ```
 
-**Required**, not optional — `search-api`'s `NeuralRerankerService` bean
-fails to start without `models/neural-reranker/model.onnx`, exactly like
-the `EmbeddingService`/`RerankerService` beans already fail without their
-model dirs. One-time (unless you want to retrain): fine-tunes a small MLP
-over 6 cheap features on 80% of the WANDS queries and exports it to ONNX,
-plus writes the held-out 20% query split
-`search-eval/src/main/resources/neural-reranker-eval-queries.txt` used to
-score it fairly in step 5. Needs Elasticsearch running with the catalog
-already ingested (step 3) — features are computed against the live index.
+**Required** — `search-api`'s `NeuralRerankerService` bean fails to start
+without `models/neural-reranker/model.onnx`, like the
+`EmbeddingService`/`RerankerService` beans fail without their model dirs.
+One-time (unless you want to retrain), about a minute. It runs two steps:
 
-**Verify:** `models/neural-reranker/model.onnx` exists (a few hundred
-bytes — it's a tiny model, 6 inputs → 8 hidden units → 1 output). See
-[TRAINING.md](TRAINING.md) for the complete process and real results.
+1. `RerankFeatureExportCli` (Java) runs Hybrid for every WANDS query and
+   writes each top-50 candidate's feature vector and grade to
+   `models/neural-reranker/training-features.tsv`. It uses the same
+   feature code the strategy serves with.
+2. `training/train_neural_reranker.py` trains a small MLP with a
+   LambdaRank loss on the training split and exports it to ONNX. The
+   held-out queries in
+   `search-eval/src/main/resources/neural-reranker-eval-queries.txt` are
+   never used for training or model selection.
+
+Needs Elasticsearch running with the catalog already ingested (step 3).
+
+**Verify:** `models/neural-reranker/model.onnx` exists (a few KB — 17
+inputs → 32 → 16 → 1 output). See [TRAINING.md](TRAINING.md) for the
+complete process and results.
 
 ### 5. Train the embedding tower
 
@@ -117,11 +138,11 @@ bytes — it's a tiny model, 6 inputs → 8 hidden units → 1 output). See
 ./scripts/train-embedding-tower.sh shared
 ```
 
-**Required**, not optional — `search-api`'s `learnedTowerEmbeddingService`
-bean fails to start without `models/learned-shared-tower/model.onnx`. Fine-tunes
+**Required** — `search-api`'s `learnedTowerEmbeddingService` bean fails to
+start without `models/learned-shared-tower/model.onnx`. Fine-tunes
 `bge-small-en-v1.5` on WANDS (one shared encoder for both queries and
-products — this mode won a head-to-head against a true two-tower
-alternative, see [TRAINING.md](TRAINING.md)), then populates every
+products — this mode outscores the two-tower alternative, see
+[TRAINING.md](TRAINING.md)), then populates every
 product's `learned_embedding` field via
 `java -jar search-ingestion/target/search-ingestion.jar --learned-model-dir
 models/learned-shared-tower` (the wrapper script does this for you). Needs
@@ -141,12 +162,25 @@ documents).
 ```
 
 Writes `RESULTS.md` and per-strategy CSVs under `results/`. Add
-`--baseline-file ci/eval-baseline.json` to gate against the same regression
-floor CI used to enforce (see [CI.md](CI.md) — this eval is no longer run
-in CI itself, only locally).
+`--baseline-file ci/eval-baseline.json` to fail if any strategy's nDCG@10
+drops below its regression floor (see [CI.md](CI.md) — this eval runs
+locally, not in CI).
 
-**Verify:** exits 0 and prints `All 6 strategies met their baseline floor`
+**Verify:** exits 0 and prints `All 7 strategies met their baseline floor`
 when given `--baseline-file`; otherwise just check `RESULTS.md` was written.
+
+To re-tune the HNSW strategy (optional, about 2 minutes):
+
+```bash
+java -cp search-eval/target/search-eval.jar com.avanti.search.eval.HnswTuningCli
+```
+
+It builds a scratch index per vector type and graph setting, compares each
+`num_candidates` value against exact kNN, writes `results/hnsw-sweep.csv`,
+and logs the recommended setting. Apply a new graph setting in
+`products-mapping.json` (then rebuild the field) and a new
+`num_candidates` in `application.yml` (`search.semantic-hnsw`) and
+`EvalCli`.
 
 ### 7. Run search-api
 
@@ -193,8 +227,8 @@ weights into the image, and points `SEARCH_ELASTICSEARCH_HOST` at the
 `elasticsearch` compose service by name — no extra configuration needed
 beyond having already completed steps 2, 4, and 5 above (`models/`
 contains `bge-small-en-v1.5`, `ms-marco-MiniLM-L-6-v2`, `neural-reranker`,
-and `learned-shared-tower`, all four required now that all six strategies
-are wired in — `docker-compose.yml`'s `search-api` service sets a
+and `learned-shared-tower`, all four required by the strategies —
+`docker-compose.yml`'s `search-api` service sets a
 `SEARCH_MODELS_*_DIR` env var per model dir, same names `application.yml`
 uses locally).
 
@@ -214,17 +248,16 @@ module. Tests that need Elasticsearch or the models skip gracefully
 (`Assumptions.assumeTrue`) if steps 0–2 (or 4/5, for the neural reranker
 and tower tests) haven't been done yet.
 
-## Also training the two-tower alternative (optional — already compared)
+## Training the two-tower alternative (optional)
 
 ```bash
 ./scripts/train-embedding-tower.sh two-tower
 ```
 
-Fine-tunes the losing candidate from Track B's comparison — separate
-query/product encoders instead of step 5's shared one. Nothing in
-`search-api` depends on this (step 5's shared-tower already won and is
-what's actually deployed); only useful if you want to reproduce the
-comparison yourself or experiment further. See [TRAINING.md](TRAINING.md)
+Fine-tunes the other Track B candidate — separate query/product encoders
+instead of step 5's shared one. Nothing in `search-api` depends on this
+(step 5's shared tower is what's served); use it to reproduce the
+comparison or experiment further. See [TRAINING.md](TRAINING.md)
 for the full runbook, exact hyperparameters, and both candidates' numbers.
 
 ## Running from IntelliJ
@@ -259,9 +292,9 @@ run configuration does); for config 8/10, IntelliJ's own Stop button on that
 running configuration works too.
 
 Note config 5's train-embedding-tower.sh takes `shared` or `two-tower` as
-an argument — the shared config above is fixed to `shared` (the winning,
-actually-deployed mode); there's no dedicated config for training
-`two-tower` since it's optional/already-compared (see the section above).
+an argument — the config is fixed to `shared` (the served mode); there's
+no dedicated config for the optional `two-tower` mode (see the section
+above).
 
 After step 7, `scripts/extract-product-details.py` pulls the full WANDS
 `product.csv` record (description, structured attributes, rating) for
@@ -278,8 +311,7 @@ for local dev simplicity — not for production use.
 
 ## Where to go next
 
-See [WRITEUP.md](WRITEUP.md) for the full narrative: what was tried at each
-milestone, what broke, and how the final numbers were arrived at. See
+See [RESULTS.md](RESULTS.md) for the evaluation numbers and
 [ARCHITECTURE.md](ARCHITECTURE.md) for module layout and key decisions, and
 [CI.md](CI.md) for the pipeline/security posture. See
 [TRAINING.md](TRAINING.md) for complete setup, process, and results for

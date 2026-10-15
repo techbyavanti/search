@@ -15,6 +15,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 
 /**
@@ -37,18 +41,41 @@ import java.util.concurrent.Semaphore;
  * rather than share that parallelism, thrashing the CPU. Session threading
  * is pinned to 1 and callers are gated by a semaphore sized to the core
  * count instead, so at most one forward pass runs per core.
+ *
+ * <p>With one thread per forward pass, a single request would use only one
+ * core. So {@link #scoreBatch} splits a large batch into chunks of
+ * {@code chunkSize} pairs and runs the chunks in parallel, each as its own
+ * single-threaded forward pass through the same semaphore. A lone request
+ * then spreads across cores, while a burst of concurrent requests still
+ * shares them instead of oversubscribing. Smaller chunks also pad to their
+ * own longest pair rather than the whole batch's. Because the model uses
+ * dynamic INT8 quantization (scales computed per forward pass), a pair's
+ * exact score can shift slightly with chunk boundaries; relative ordering
+ * is what reranking depends on, and the eval harness measures it.
  */
 public final class RerankerService implements AutoCloseable {
 
     private static final int MAX_SEQUENCE_LENGTH = 256;
     private static final String OUTPUT_NAME = "logits";
+    public static final int DEFAULT_CHUNK_SIZE = 5;
 
     private final OrtEnvironment environment;
     private final OrtSession session;
     private final HuggingFaceTokenizer tokenizer;
     private final Semaphore inferenceGate = new Semaphore(Math.max(1, Runtime.getRuntime().availableProcessors()));
+    private final ExecutorService chunkExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final int chunkSize;
 
     public RerankerService(Path modelDir) throws IOException {
+        this(modelDir, DEFAULT_CHUNK_SIZE);
+    }
+
+    /** @param chunkSize max (query, document) pairs per forward pass; larger batches are split and run in parallel */
+    public RerankerService(Path modelDir, int chunkSize) throws IOException {
+        if (chunkSize < 1) {
+            throw new IllegalArgumentException("chunkSize must be >= 1, was " + chunkSize);
+        }
+        this.chunkSize = chunkSize;
         this.environment = OrtEnvironment.getEnvironment();
         try {
             OrtSession.SessionOptions options = new OrtSession.SessionOptions();
@@ -70,8 +97,42 @@ public final class RerankerService implements AutoCloseable {
         return scoreBatch(query, List.of(document)).get(0);
     }
 
-    /** Scores a query against a batch of documents in one forward pass. */
+    /**
+     * Scores a query against a batch of documents, in input order. Batches
+     * larger than {@code chunkSize} are split into chunks scored in parallel.
+     */
     public List<Float> scoreBatch(String query, List<String> documents) {
+        if (documents.size() <= chunkSize) {
+            return scoreChunk(query, documents);
+        }
+
+        List<Future<List<Float>>> chunks = new ArrayList<>();
+        for (int start = 0; start < documents.size(); start += chunkSize) {
+            List<String> chunk = documents.subList(start, Math.min(start + chunkSize, documents.size()));
+            chunks.add(chunkExecutor.submit(() -> scoreChunk(query, chunk)));
+        }
+
+        List<Float> scores = new ArrayList<>(documents.size());
+        try {
+            for (Future<List<Float>> chunk : chunks) {
+                scores.addAll(chunk.get());
+            }
+        } catch (InterruptedException e) {
+            chunks.forEach(chunk -> chunk.cancel(true));
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while reranking", e);
+        } catch (ExecutionException e) {
+            chunks.forEach(chunk -> chunk.cancel(true));
+            if (e.getCause() instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IllegalStateException("Reranking failed", e.getCause());
+        }
+        return scores;
+    }
+
+    /** Scores one chunk of documents in a single forward pass. */
+    private List<Float> scoreChunk(String query, List<String> documents) {
         PairList<String, String> pairs = new PairList<>(Collections.nCopies(documents.size(), query), documents);
         Encoding[] encodings = tokenizer.batchEncode(pairs);
 
@@ -118,6 +179,7 @@ public final class RerankerService implements AutoCloseable {
 
     @Override
     public void close() {
+        chunkExecutor.close();
         tokenizer.close();
         try {
             session.close();

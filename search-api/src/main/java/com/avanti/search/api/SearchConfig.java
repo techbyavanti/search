@@ -4,6 +4,7 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import com.avanti.search.inference.EmbeddingService;
 import com.avanti.search.inference.NeuralRerankerService;
 import com.avanti.search.inference.RerankerService;
+import com.avanti.search.retrieval.CachingQueryEncoder;
 import com.avanti.search.retrieval.ElasticsearchClients;
 import com.avanti.search.retrieval.HybridRerankStrategy;
 import com.avanti.search.retrieval.HybridRrfSearchStrategy;
@@ -12,8 +13,10 @@ import com.avanti.search.retrieval.LexicalSearchStrategy;
 import com.avanti.search.retrieval.NeuralRerankStrategy;
 import com.avanti.search.retrieval.ProductFeatureCache;
 import com.avanti.search.retrieval.ProductLookup;
+import com.avanti.search.retrieval.RerankScoreCache;
 import com.avanti.search.retrieval.SearchStrategy;
 import com.avanti.search.retrieval.SemanticSearchStrategy;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -49,7 +52,7 @@ public class SearchConfig {
 
     @Bean
     public RerankerService rerankerService(SearchProperties properties) throws IOException {
-        return new RerankerService(properties.models().rerankerDir());
+        return new RerankerService(properties.models().rerankerDir(), properties.reranker().chunkSize());
     }
 
     @Bean
@@ -59,7 +62,18 @@ public class SearchConfig {
 
     @Bean
     public ProductFeatureCache productFeatureCache(ElasticsearchClient client, SearchProperties properties) {
-        return new ProductFeatureCache(ids -> ProductLookup.fetchByIds(client, ids), properties.featureCache().maxSize());
+        return new ProductFeatureCache(ids -> ProductLookup.fetchFeaturesByIds(client, ids), properties.featureCache().maxSize());
+    }
+
+    /** Shared by every strategy that embeds the query with bge-small-en-v1.5, so a request encodes it once. */
+    @Bean
+    public CachingQueryEncoder queryEncoder(EmbeddingService embeddingService, SearchProperties properties) {
+        return new CachingQueryEncoder(embeddingService, properties.queryEmbeddingCache().maxSize());
+    }
+
+    @Bean
+    public RerankScoreCache rerankScoreCache(SearchProperties properties) {
+        return new RerankScoreCache(properties.reranker().scoreCacheMaxSize());
     }
 
     @Bean
@@ -68,27 +82,36 @@ public class SearchConfig {
     }
 
     @Bean
-    public SemanticSearchStrategy semanticSearchStrategy(ElasticsearchClient client, EmbeddingService embeddingService) {
-        return new SemanticSearchStrategy(client, embeddingService);
+    public SemanticSearchStrategy semanticSearchStrategy(ElasticsearchClient client, CachingQueryEncoder queryEncoder) {
+        return new SemanticSearchStrategy(client, queryEncoder);
+    }
+
+    /** Same embeddings in a float HNSW field, with graph and query parameters tuned by HnswTuningCli. */
+    @Bean
+    public SemanticSearchStrategy semanticHnswSearchStrategy(
+            ElasticsearchClient client, CachingQueryEncoder queryEncoder, SearchProperties properties) {
+        return SemanticSearchStrategy.tunedHnsw(client, queryEncoder, properties.semanticHnsw().numCandidates());
     }
 
     @Bean
     public HybridRrfSearchStrategy hybridRrfSearchStrategy(
-            LexicalSearchStrategy lexical, SemanticSearchStrategy semantic, SearchProperties properties) {
+            LexicalSearchStrategy lexical, @Qualifier("semanticSearchStrategy") SemanticSearchStrategy semantic,
+            SearchProperties properties) {
         return new HybridRrfSearchStrategy(lexical, semantic, properties.hybrid().candidatePoolSize(), properties.hybrid().rrfK());
     }
 
     @Bean
     public HybridRerankStrategy hybridRerankStrategy(
-            HybridRrfSearchStrategy hybrid, ProductFeatureCache featureCache, RerankerService rerankerService, SearchProperties properties) {
-        return new HybridRerankStrategy(hybrid, featureCache, rerankerService, properties.hybrid().candidatePoolSize());
+            HybridRrfSearchStrategy hybrid, ProductFeatureCache featureCache, RerankerService rerankerService,
+            RerankScoreCache rerankScoreCache, SearchProperties properties) {
+        return new HybridRerankStrategy(hybrid, featureCache, rerankerService, rerankScoreCache, properties.hybrid().candidatePoolSize());
     }
 
     @Bean
     public NeuralRerankStrategy neuralRerankStrategy(
-            HybridRrfSearchStrategy hybrid, ElasticsearchClient client, EmbeddingService embeddingService,
+            HybridRrfSearchStrategy hybrid, CachingQueryEncoder queryEncoder,
             NeuralRerankerService neuralRerankerService, ProductFeatureCache featureCache, SearchProperties properties) {
-        return new NeuralRerankStrategy(hybrid, client, embeddingService, neuralRerankerService, featureCache, properties.hybrid().candidatePoolSize());
+        return new NeuralRerankStrategy(hybrid, queryEncoder, neuralRerankerService, featureCache, properties.hybrid().candidatePoolSize());
     }
 
     @Bean
@@ -99,12 +122,15 @@ public class SearchConfig {
 
     @Bean
     public Map<StrategyType, SearchStrategy> strategiesByType(
-            LexicalSearchStrategy lexical, SemanticSearchStrategy semantic,
+            LexicalSearchStrategy lexical,
+            @Qualifier("semanticSearchStrategy") SemanticSearchStrategy semantic,
+            @Qualifier("semanticHnswSearchStrategy") SemanticSearchStrategy semanticHnsw,
             HybridRrfSearchStrategy hybrid, HybridRerankStrategy rerank, NeuralRerankStrategy neuralRerank,
             LearnedTowerSearchStrategy learnedTower) {
         return Map.of(
                 StrategyType.LEXICAL, lexical,
                 StrategyType.SEMANTIC, semantic,
+                StrategyType.SEMANTIC_HNSW, semanticHnsw,
                 StrategyType.HYBRID, hybrid,
                 StrategyType.RERANK, rerank,
                 StrategyType.NEURAL_RERANK, neuralRerank,

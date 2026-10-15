@@ -9,7 +9,10 @@ public record SearchProperties(
         Elasticsearch elasticsearch,
         Models models,
         Hybrid hybrid,
-        FeatureCache featureCache
+        FeatureCache featureCache,
+        QueryEmbeddingCache queryEmbeddingCache,
+        SemanticHnsw semanticHnsw,
+        Reranker reranker
 ) {
     public record Elasticsearch(String host) {
     }
@@ -21,10 +24,27 @@ public record SearchProperties(
     public record FeatureCache(int maxSize) {
     }
 
+    /** num_candidates for the tuned float-HNSW strategy; see results/hnsw-sweep.csv. */
+    public record SemanticHnsw(int numCandidates) {
+    }
+
+    /** Bounds CachingQueryEncoder in queries (~1.5 KB per 384-dim vector). */
+    public record QueryEmbeddingCache(int maxSize) {
+    }
+
     /**
-     * rrfK=60 is the constant search-eval's offline sweep found best on the
+     * chunkSize: max (query, product) pairs per cross-encoder forward pass —
+     * a 50-candidate pool becomes 10 parallel passes. scoreCacheMaxSize bounds
+     * RerankScoreCache in (query, product) entries; 0 disables it.
+     */
+    public record Reranker(int chunkSize, int scoreCacheMaxSize) {
+    }
+
+    /**
+     * rrfK=40 is the constant search-eval's offline sweep found best on the
      * WANDS eval set (see RESULTS.md's RRF sweep table — the curve is flat
-     * from k=40-200, so this isn't a fragile choice); a real deployment
+     * across the swept range, so this isn't a fragile choice). The neural
+     * reranker is trained on pools fused with this same k. A real deployment
      * would periodically re-sweep against fresh judgments rather than
      * trust a value picked once.
      */

@@ -14,10 +14,9 @@ every push/PR:
   and `p/secrets` rulesets.
 - **`secret-scan`** — gitleaks against the full commit history, so a
   credential can't slip in and get baked into an image layer later.
-- **`docker-lint`** — hadolint against `search-api/Dockerfile` (this is
-  what caught that the non-root `USER` directive should be numeric
-  `1000:1000`, not a name, for portability to orchestrators that don't
-  read `/etc/passwd`).
+- **`docker-lint`** — hadolint against `search-api/Dockerfile`. The
+  image runs as a numeric non-root `USER 1000:1000`, which works on
+  orchestrators that don't read `/etc/passwd`.
 - **`docker-image-scan`** — builds the real `search-api` runtime image
   and scans it (OS + JRE layer, not just the jar's dependencies) with
   Trivy, plus generates a CycloneDX SBOM as a build artifact via Syft.
@@ -39,18 +38,17 @@ protection in particular blocks a secret *before* it's pushed, which a
 CI-time scan structurally can't).
 
 Deliberately **not** in this pipeline: Cosign image signing and registry
-immutability controls. Those protect a *registry* this project doesn't
-have — there's no ECR/Harbor push step, so wiring up signing would be
-config theater, not a real control. Worth adding the day this project
-(or reader's fork of it) actually pushes images somewhere.
+immutability controls. Those protect a *registry*, and this project has no
+image push step, so signing would not be a real control here. They belong
+in the pipeline once images are pushed to a registry.
 
 ## Regression eval (not run in CI)
 
 The full-catalog regression eval (ingest all ~43K products with real
-embeddings, run all 480 WANDS queries against all four strategies, fail if
+embeddings, run all 480 WANDS queries against all seven strategies, fail if
 any strategy's nDCG@10 drops below the floor in `ci/eval-baseline.json`) is
-**not** run in CI — embedding 43K products is genuinely slow, and that cost
-doesn't belong on a shared runner on every push. Run it locally instead:
+**not** run in CI. Embedding 43K products is slow, and that cost does not
+belong on a shared runner on every push. Run it locally instead:
 
 ```
 ./scripts/run-eval.sh --baseline-file ci/eval-baseline.json

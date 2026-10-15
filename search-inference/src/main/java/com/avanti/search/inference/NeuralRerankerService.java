@@ -3,6 +3,7 @@ package com.avanti.search.inference;
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
+import ai.onnxruntime.TensorInfo;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -27,14 +28,22 @@ public final class NeuralRerankerService implements AutoCloseable {
 
     private final OrtEnvironment environment;
     private final OrtSession session;
+    private final int featureCount;
 
     public NeuralRerankerService(Path modelDir) throws IOException {
         this.environment = OrtEnvironment.getEnvironment();
         try {
             this.session = environment.createSession(modelDir.resolve("model.onnx").toString(), new OrtSession.SessionOptions());
+            long[] inputShape = ((TensorInfo) session.getInputInfo().get(INPUT_NAME).getInfo()).getShape();
+            this.featureCount = (int) inputShape[1];
         } catch (ai.onnxruntime.OrtException e) {
             throw new IOException("Failed to load ONNX model from " + modelDir, e);
         }
+    }
+
+    /** The feature vector length the model was trained on. */
+    public int featureCount() {
+        return featureCount;
     }
 
     /** Scores a batch of feature vectors (each the length RerankFeatureBuilder produces) in one forward pass. */

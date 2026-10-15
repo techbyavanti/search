@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -55,5 +56,44 @@ class RerankerServiceTest {
             assertThat(batchScores.get(0)).isGreaterThan(batchScores.get(1));
             assertThat(reranker.score(query, docA)).isGreaterThan(reranker.score(query, docB));
         }
+    }
+
+    @Test
+    void chunkedScoringKeepsInputOrderAndRanking() throws IOException {
+        String query = "queen size platform bed frame";
+        List<String> documents = List.of(
+                "Brass desk lamp with an adjustable arm.",
+                "Outdoor patio umbrella with a crank lift.",
+                "Solid wood queen platform bed frame with wooden slats.",
+                "Ceramic coffee mug, set of four.",
+                "Velvet accent chair with gold legs.");
+
+        try (RerankerService unchunked = new RerankerService(MODEL_DIR, documents.size());
+             RerankerService chunked = new RerankerService(MODEL_DIR, 2)) {
+            List<Float> whole = unchunked.scoreBatch(query, documents);
+            List<Float> inChunks = chunked.scoreBatch(query, documents);
+
+            // Chunks of 2 over 5 documents means 3 parallel forward passes; results must
+            // come back in input order, so the bed frame (index 2) still scores highest.
+            assertThat(inChunks).hasSize(documents.size());
+            assertThat(indexOfMax(inChunks)).isEqualTo(2);
+            assertThat(indexOfMax(whole)).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void rejectsANonPositiveChunkSize() {
+        assertThatThrownBy(() -> new RerankerService(MODEL_DIR, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static int indexOfMax(List<Float> scores) {
+        int best = 0;
+        for (int i = 1; i < scores.size(); i++) {
+            if (scores.get(i) > scores.get(best)) {
+                best = i;
+            }
+        }
+        return best;
     }
 }

@@ -1,6 +1,9 @@
 package com.avanti.search.retrieval;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Fuses the lexical and semantic strategies' ranked lists with Reciprocal
@@ -24,10 +27,38 @@ public final class HybridRrfSearchStrategy implements SearchStrategy {
 
     @Override
     public List<ScoredResult> search(String query, int topK) {
+        return searchWithSignals(query, topK).stream().map(HybridCandidate::toScoredResult).toList();
+    }
+
+    /** The same fused ranking as {@link #search}, with each candidate's lexical and semantic rank and score kept. */
+    public List<HybridCandidate> searchWithSignals(String query, int topK) {
         List<ScoredResult> lexicalResults = lexical.search(query, candidatePoolSize);
         List<ScoredResult> semanticResults = semantic.search(query, candidatePoolSize);
         List<ScoredResult> fused = RrfFusionService.fuse(List.of(lexicalResults, semanticResults), rrfK);
-        return fused.size() > topK ? fused.subList(0, topK) : fused;
+
+        Map<String, Integer> lexicalRanks = ranksById(lexicalResults);
+        Map<String, Integer> semanticRanks = ranksById(semanticResults);
+
+        int size = Math.min(topK, fused.size());
+        List<HybridCandidate> candidates = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            ScoredResult result = fused.get(i);
+            int lexicalRank = lexicalRanks.getOrDefault(result.productId(), 0);
+            int semanticRank = semanticRanks.getOrDefault(result.productId(), 0);
+            candidates.add(new HybridCandidate(
+                    result.productId(), i + 1, result.score(),
+                    lexicalRank, lexicalRank > 0 ? lexicalResults.get(lexicalRank - 1).score() : 0.0,
+                    semanticRank, semanticRank > 0 ? semanticResults.get(semanticRank - 1).score() : 0.0));
+        }
+        return candidates;
+    }
+
+    private static Map<String, Integer> ranksById(List<ScoredResult> results) {
+        Map<String, Integer> ranks = new HashMap<>();
+        for (int i = 0; i < results.size(); i++) {
+            ranks.putIfAbsent(results.get(i).productId(), i + 1);
+        }
+        return ranks;
     }
 
     @Override

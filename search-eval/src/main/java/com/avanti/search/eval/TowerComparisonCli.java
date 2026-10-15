@@ -19,11 +19,9 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Standalone, throwaway driver for Track B's staged tower comparison — NOT
- * part of the permanent 5-strategy EvalCli flow (deliberately kept
- * separate so EvalCli doesn't churn before a winner is chosen; once one
- * is, LearnedTowerSearchStrategy gets wired into EvalCli properly as a 6th
- * strategy the same way NeuralRerankStrategy was).
+ * Standalone driver for Track B's tower comparison. It scores any
+ * candidate tower (shared or two-tower) on the held-out split, while
+ * EvalCli scores only the served one.
  *
  * Usage: java -cp search-eval/target/search-eval.jar
  *        com.avanti.search.eval.TowerComparisonCli <model-dir> <label>

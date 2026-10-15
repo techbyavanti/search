@@ -43,7 +43,7 @@ public class SearchController {
         return new SearchResult(query, searchStrategy.name(), toProductResults(results));
     }
 
-    @Operation(summary = "Run all four ranking strategies for the same query, side by side")
+    @Operation(summary = "Run every ranking strategy for the same query, side by side")
     @GetMapping("/compare")
     public CompareResult compare(
             @RequestParam String query,

@@ -13,7 +13,7 @@ class ProductFeatureCacheTest {
 
     private static ProductDocument fakeDocument(String id) {
         return new ProductDocument(id, "Product " + id, "Class", "Category", "Description",
-                "features", 10, 4.0, 5, new float[]{1.0f, 0.0f}, null);
+                "features", 10, 4.0, 5, new float[]{1.0f, 0.0f}, null, null);
     }
 
     @Test

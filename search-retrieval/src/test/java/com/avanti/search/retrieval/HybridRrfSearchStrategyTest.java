@@ -8,62 +8,47 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class HybridRrfSearchStrategyTest {
 
+    private static SearchStrategy fixed(List<ScoredResult> results) {
+        return new SearchStrategy() {
+            @Override
+            public List<ScoredResult> search(String query, int topK) {
+                return results;
+            }
+
+            @Override
+            public String name() {
+                return "fixed";
+            }
+        };
+    }
+
+    private final HybridRrfSearchStrategy hybrid = new HybridRrfSearchStrategy(
+            fixed(List.of(new ScoredResult("a", 12.0), new ScoredResult("b", 9.0))),
+            fixed(List.of(new ScoredResult("b", 0.95), new ScoredResult("c", 0.90))),
+            50, 60);
+
     @Test
-    void queriesBothSubStrategiesWithTheCandidatePoolSizeNotTopK() {
-        FixedSearchStrategy lexical = new FixedSearchStrategy(
-                "Lexical", List.of(new ScoredResult("a", 10.0), new ScoredResult("b", 8.0)));
-        FixedSearchStrategy semantic = new FixedSearchStrategy(
-                "Semantic", List.of(new ScoredResult("b", 0.9), new ScoredResult("a", 0.7)));
+    void signalsKeepEachRetrieversRankAndScore() {
+        List<HybridCandidate> candidates = hybrid.searchWithSignals("q", 10);
 
-        HybridRrfSearchStrategy hybrid = new HybridRrfSearchStrategy(lexical, semantic, 50, 60);
-        hybrid.search("query", 10);
+        assertThat(candidates).extracting(HybridCandidate::productId).containsExactly("b", "a", "c");
+        HybridCandidate b = candidates.get(0);
+        assertThat(b.hybridRank()).isEqualTo(1);
+        assertThat(b.rrfScore()).isEqualTo(1.0 / 62 + 1.0 / 61);
+        assertThat(b.lexicalRank()).isEqualTo(2);
+        assertThat(b.lexicalScore()).isEqualTo(9.0);
+        assertThat(b.semanticRank()).isEqualTo(1);
+        assertThat(b.semanticScore()).isEqualTo(0.95);
 
-        assertThat(lexical.lastRequestedTopK).isEqualTo(50);
-        assertThat(semantic.lastRequestedTopK).isEqualTo(50);
+        HybridCandidate c = candidates.get(2);
+        assertThat(c.lexicalRank()).isZero();
+        assertThat(c.lexicalScore()).isZero();
     }
 
     @Test
-    void truncatesFusedResultsToRequestedTopK() {
-        FixedSearchStrategy lexical = new FixedSearchStrategy("Lexical", List.of(
-                new ScoredResult("a", 10.0), new ScoredResult("b", 9.0), new ScoredResult("c", 8.0)));
-        FixedSearchStrategy semantic = new FixedSearchStrategy("Semantic", List.of());
-
-        HybridRrfSearchStrategy hybrid = new HybridRrfSearchStrategy(lexical, semantic, 50, 60);
-        List<ScoredResult> results = hybrid.search("query", 2);
-
-        assertThat(results).hasSize(2);
-        assertThat(results).extracting(ScoredResult::productId).containsExactly("a", "b");
-    }
-
-    @Test
-    void nameIncludesTheConfiguredRrfConstant() {
-        HybridRrfSearchStrategy hybrid = new HybridRrfSearchStrategy(
-                new FixedSearchStrategy("Lexical", List.of()),
-                new FixedSearchStrategy("Semantic", List.of()),
-                50, 42);
-
-        assertThat(hybrid.name()).isEqualTo("Hybrid (RRF, k=42)");
-    }
-
-    private static final class FixedSearchStrategy implements SearchStrategy {
-        private final String name;
-        private final List<ScoredResult> results;
-        private int lastRequestedTopK = -1;
-
-        private FixedSearchStrategy(String name, List<ScoredResult> results) {
-            this.name = name;
-            this.results = results;
-        }
-
-        @Override
-        public List<ScoredResult> search(String query, int topK) {
-            this.lastRequestedTopK = topK;
-            return results;
-        }
-
-        @Override
-        public String name() {
-            return name;
-        }
+    void searchReturnsTheSameRankingAsTheSignals() {
+        assertThat(hybrid.search("q", 2)).containsExactly(
+                new ScoredResult("b", 1.0 / 62 + 1.0 / 61),
+                new ScoredResult("a", 1.0 / 61));
     }
 }

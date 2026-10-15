@@ -1,76 +1,67 @@
 #!/usr/bin/env python3
-"""Trains the neural reranker's small MLP and exports it to ONNX.
+"""Trains the neural reranker's small MLP with a LambdaRank objective and exports it to ONNX.
 
-Offline, one-time (well, "one-time until you want to retrain") step — not
-part of the Java build. Run via ../scripts/train-neural-reranker.sh, which
-just invokes this with the venv's interpreter. Requires:
-  - Elasticsearch running locally with the full catalog already ingested
-    (see HOWTO.md steps 0-3) — features are computed against the live
-    index rather than reimplemented, so training data matches serving
-    exactly for everything except the query embedding (see below).
-  - dataset/query.csv and dataset/label.csv (see HOWTO.md step 1).
-  - models/bge-small-en-v1.5/{model.onnx,tokenizer.json} (see HOWTO.md
-    step 2) — used to compute query embeddings the same way
-    EmbeddingService.java does (CLS-pool, L2-normalize, BGE query prefix).
-    This is the one place training and serving don't share code, so it's
-    spot-checked against a known Java-computed embedding at the bottom of
-    this file's __main__ block.
+Run via ../scripts/train-neural-reranker.sh, which first runs the Java
+RerankFeatureExportCli to write models/neural-reranker/training-features.tsv:
+one row per (query, hybrid candidate), with the exact feature vector
+NeuralRerankStrategy serves (RerankFeatureBuilder.java is the only feature
+implementation, so training and serving cannot drift apart) and the WANDS
+grade (0 for unlabeled candidates, as in the eval).
+
+Training uses only the "train" query split. 15% of those queries are kept
+aside for early stopping and model selection, so the held-out queries
+EvalCli scores are never used to choose anything.
+
+Loss: LambdaRank. For each pair of candidates in one query's pool where one
+has a higher grade, the pairwise logistic loss is weighted by how much
+swapping the two would change that query's nDCG. This optimizes ranking
+order directly, unlike a pointwise regression on the grade (kept as
+--loss mse for comparison).
+
+Feature standardization (mean/std from the training rows) is part of the
+exported graph, so the Java side feeds raw features.
 
 Writes:
-  - models/neural-reranker/model.onnx
-  - search-eval/src/main/resources/neural-reranker-eval-queries.txt
-    (the held-out 20% of query ids, so EvalCli scores this strategy only
-    on queries it never trained on)
-
-Feature order is a contract with RerankFeatureBuilder.java — see FEATURE
-NAMES below and search-retrieval/.../RerankFeatureBuilder.java. Changing
-one side without the other silently produces garbage scores.
+  - models/neural-reranker/model.onnx (input "features" [batch, 17] -> output "score" [batch, 1])
+  - models/neural-reranker/training-metadata.json
 """
+import argparse
 import csv
 import json
-import math
+import random
 from pathlib import Path
 
 import numpy as np
 import onnx
 import onnxruntime as ort
-import requests
 import torch
 import torch.nn as nn
-from tokenizers import Tokenizer
+import torch.nn.functional as F
 
 from query_split import split_query_ids
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATASET_DIR = ROOT_DIR / "dataset"
-ES_HOST = "http://localhost:9200"
-INDEX = "products"
-
-EMBEDDING_MODEL_DIR = ROOT_DIR / "models" / "bge-small-en-v1.5"
-QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
-MAX_SEQUENCE_LENGTH = 256
-
 OUTPUT_MODEL_DIR = ROOT_DIR / "models" / "neural-reranker"
+FEATURES_FILE = OUTPUT_MODEL_DIR / "training-features.tsv"
 HELD_OUT_QUERIES_FILE = ROOT_DIR / "search-eval" / "src" / "main" / "resources" / "neural-reranker-eval-queries.txt"
 
-CANDIDATE_POOL_SIZE = 50  # matches application.yml's search.hybrid.candidate-pool-size
-RRF_K = 60  # matches application.yml's search.hybrid.rrf-k (RESULTS.md's swept best)
-NUM_CANDIDATES_MULTIPLIER = 10  # matches SemanticSearchStrategy.NUM_CANDIDATES_MULTIPLIER
+GRADE_BY_LABEL = {"exact": 2, "partial": 1, "irrelevant": 0}
+NDCG_K = 10
+VALIDATION_FRACTION = 0.15
+SEED = 42
+META_COLUMNS = ["query_id", "split", "product_id", "grade"]
 
-# Feature order — must match RerankFeatureBuilder.java exactly.
-FEATURE_NAMES = [
-    "rrf_score",
-    "cosine_similarity",
-    "exact_term_overlap_fraction",
-    "category_match",
-    "average_rating",
-    "log1p_review_count",
-]
-DEFAULT_AVERAGE_RATING = 4.5301  # dataset-wide mean average_rating; matches RerankFeatureBuilder.DEFAULT_AVERAGE_RATING
 
-GRADE_BY_LABEL = {"exact": 2.0, "partial": 1.0, "irrelevant": 0.0}
+class QueryPool:
+    """One query's candidate pool, in hybrid order."""
 
-LEXICAL_FIELDS = ["product_name^3", "product_class^2", "category_hierarchy", "product_description", "product_features"]
+    def __init__(self, query_id, features, grades, ideal_dcg):
+        self.query_id = query_id
+        self.features = torch.from_numpy(features)
+        self.grades = torch.from_numpy(grades)
+        self.grades_np = grades
+        self.ideal_dcg = ideal_dcg
 
 
 def load_tsv(path):
@@ -78,178 +69,156 @@ def load_tsv(path):
         return list(csv.DictReader(f, delimiter="\t"))
 
 
-def tokenize(text):
-    if not text:
-        return []
-    return [t for t in "".join(c.lower() if c.isalnum() else " " for c in text).split(" ") if t]
+def dcg(grades, k):
+    grades = np.asarray(grades[:k], dtype=np.float64)
+    return float(np.sum((2.0 ** grades - 1.0) / np.log2(np.arange(len(grades)) + 2.0)))
 
 
-class QueryEmbedder:
-    """Mirrors EmbeddingService.embedQuery: CLS-pool + L2-normalize + BGE query prefix."""
-
-    def __init__(self, model_dir):
-        self.tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
-        self.tokenizer.enable_truncation(max_length=MAX_SEQUENCE_LENGTH)
-        self.session = ort.InferenceSession(str(model_dir / "model.onnx"))
-
-    def embed(self, query):
-        encoding = self.tokenizer.encode(QUERY_PREFIX + query)
-        input_ids = np.array([encoding.ids], dtype=np.int64)
-        attention_mask = np.array([encoding.attention_mask], dtype=np.int64)
-        token_type_ids = np.array([encoding.type_ids], dtype=np.int64)
-
-        outputs = self.session.run(["last_hidden_state"], {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "token_type_ids": token_type_ids,
-        })
-        cls_vector = outputs[0][0][0]  # [batch, seq, hidden] -> first token of the one batch item
-        norm = np.linalg.norm(cls_vector)
-        return cls_vector / norm if norm > 0 else cls_vector
+def ideal_dcg_by_query():
+    """Ideal DCG@10 from *all* of a query's judgments, as MetricsCalculator.ndcgAtK computes it."""
+    judged = {}
+    for row in load_tsv(DATASET_DIR / "label.csv"):
+        judged.setdefault(row["query_id"], []).append(GRADE_BY_LABEL[row["label"].strip().lower()])
+    return {qid: dcg(sorted(g, reverse=True), NDCG_K) for qid, g in judged.items()}
 
 
-def es_search(body):
-    response = requests.post(f"{ES_HOST}/{INDEX}/_search", json=body, timeout=30)
-    response.raise_for_status()
-    return response.json()["hits"]["hits"]
+def load_pools():
+    with open(FEATURES_FILE, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader)
+        feature_names = header[len(META_COLUMNS):]
+        rows_by_query, split_by_query = {}, {}
+        for row in reader:
+            rows_by_query.setdefault(row[0], []).append(row)
+            split_by_query[row[0]] = row[1]
+
+    ideal = ideal_dcg_by_query()
+    pools = {}
+    for qid, rows in rows_by_query.items():
+        features = np.array([[float(v) for v in r[len(META_COLUMNS):]] for r in rows], dtype=np.float32)
+        grades = np.array([float(r[3]) for r in rows], dtype=np.float32)
+        pools[qid] = QueryPool(qid, features, grades, ideal.get(qid, 0.0))
+    return feature_names, pools, split_by_query
 
 
-def rrf_fuse(ranked_lists, k):
-    """Mirrors RrfFusionService.fuse: sum of 1/(k + 1-based-rank) per list a doc appears in."""
-    scores = {}
-    for ranked_list in ranked_lists:
-        for i, hit_id in enumerate(ranked_list):
-            scores[hit_id] = scores.get(hit_id, 0.0) + 1.0 / (k + i + 1)
-    return scores
+def ndcg_at_k(scores, pool):
+    if pool.ideal_dcg == 0.0:
+        return 0.0
+    order = np.argsort(-scores, kind="stable")  # ties keep hybrid order, like Java's stable sort
+    return dcg(pool.grades_np[order], NDCG_K) / pool.ideal_dcg
 
 
-def hybrid_rrf_scores(query_text, query_embedding):
-    lexical_hits = es_search({
-        "size": CANDIDATE_POOL_SIZE,
-        "_source": False,
-        "query": {"multi_match": {"query": query_text, "fields": LEXICAL_FIELDS, "type": "best_fields"}},
-    })
-    semantic_hits = es_search({
-        "size": CANDIDATE_POOL_SIZE,
-        "_source": False,
-        "knn": {
-            "field": "embedding",
-            "query_vector": query_embedding.tolist(),
-            "k": CANDIDATE_POOL_SIZE,
-            "num_candidates": CANDIDATE_POOL_SIZE * NUM_CANDIDATES_MULTIPLIER,
-        },
-    })
-    lexical_ids = [hit["_id"] for hit in lexical_hits]
-    semantic_ids = [hit["_id"] for hit in semantic_hits]
-    return rrf_fuse([lexical_ids, semantic_ids], RRF_K)
+def mean_ndcg(model, pools):
+    model.eval()
+    with torch.no_grad():
+        values = [ndcg_at_k(model(p.features).squeeze(1).numpy(), p) for p in pools]
+    return float(np.mean(values))
 
 
-def mget_products(product_ids):
-    if not product_ids:
-        return {}
-    response = requests.post(f"{ES_HOST}/{INDEX}/_mget", json={
-        "docs": [{"_id": pid, "_source": ["product_name", "product_class", "category_hierarchy",
-                                           "average_rating", "review_count", "embedding"]} for pid in product_ids],
-    }, timeout=30)
-    response.raise_for_status()
-    docs = {}
-    for doc in response.json()["docs"]:
-        if doc.get("found"):
-            docs[doc["_id"]] = doc["_source"]
-    return docs
-
-
-def build_features(rrf_score, query_embedding, query_tokens, product):
-    product_embedding = np.array(product.get("embedding", []), dtype=np.float32)
-    cosine_similarity = float(np.dot(query_embedding, product_embedding)) if product_embedding.size else 0.0
-
-    name_tokens = tokenize(product.get("product_name"))
-    overlap = sum(1 for t in query_tokens if t in name_tokens)
-    exact_term_overlap_fraction = overlap / len(query_tokens) if query_tokens else 0.0
-
-    category_tokens = tokenize((product.get("category_hierarchy") or "") + " " + (product.get("product_class") or ""))
-    category_match = 1.0 if any(t in category_tokens for t in query_tokens) else 0.0
-
-    average_rating = product.get("average_rating")
-    average_rating = float(average_rating) if average_rating is not None else DEFAULT_AVERAGE_RATING
-
-    review_count = product.get("review_count")
-    log1p_review_count = math.log1p(review_count) if review_count is not None else 0.0
-
-    return [rrf_score, cosine_similarity, exact_term_overlap_fraction, category_match, average_rating, log1p_review_count]
-
-
-def collect_training_data(queries_by_id, labels_by_query, query_ids, embedder):
-    features, labels = [], []
-    for i, query_id in enumerate(query_ids):
-        query_text = queries_by_id[query_id]
-        query_tokens = tokenize(query_text)
-        query_embedding = embedder.embed(query_text)
-
-        rrf_scores = hybrid_rrf_scores(query_text, query_embedding)
-
-        product_ids = list(labels_by_query[query_id].keys())
-        products = mget_products(product_ids)
-
-        for product_id, grade in labels_by_query[query_id].items():
-            product = products.get(product_id)
-            if product is None:
-                continue
-            rrf_score = rrf_scores.get(product_id, 0.0)
-            features.append(build_features(rrf_score, query_embedding, query_tokens, product))
-            labels.append(grade)
-
-        if (i + 1) % 50 == 0:
-            print(f"  processed {i + 1}/{len(query_ids)} queries, {len(features)} labeled pairs so far")
-
-    return np.array(features, dtype=np.float32), np.array(labels, dtype=np.float32)
+def hybrid_ndcg(pools):
+    """nDCG@10 of the pool's own order, i.e. Hybrid without reranking."""
+    return float(np.mean([ndcg_at_k(-np.arange(len(p.grades_np), dtype=np.float32), p) for p in pools]))
 
 
 class RerankerNet(nn.Module):
-    def __init__(self):
+    def __init__(self, feature_count, mean, std):
         super().__init__()
+        self.register_buffer("mean", torch.from_numpy(mean))
+        self.register_buffer("std", torch.from_numpy(std))
         self.net = nn.Sequential(
-            nn.Linear(len(FEATURE_NAMES), 8),
+            nn.Linear(feature_count, 32),
             nn.ReLU(),
-            nn.Linear(8, 1),
+            nn.Linear(32, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1),
         )
 
     def forward(self, features):
-        return self.net(features)
+        return self.net((features - self.mean) / self.std)
 
 
-def train(features, labels, epochs=200, batch_size=512, lr=1e-3):
-    model = RerankerNet()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    loss_fn = nn.MSELoss()
+def lambdarank_loss(scores, grades, ideal_dcg):
+    """Sum over pairs (i more relevant than j) of |ΔnDCG_ij| * log(1 + exp(-(s_i - s_j)))."""
+    n = scores.shape[0]
+    order = torch.argsort(scores.detach(), descending=True)
+    ranks = torch.empty_like(order)
+    ranks[order] = torch.arange(n)
+    discounts = 1.0 / torch.log2(ranks.float() + 2.0)
+    gains = 2.0 ** grades - 1.0
 
-    features_t = torch.from_numpy(features)
-    labels_t = torch.from_numpy(labels).unsqueeze(1)
-    dataset = torch.utils.data.TensorDataset(features_t, labels_t)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    more_relevant = (grades[:, None] - grades[None, :]) > 0
+    delta_ndcg = torch.abs((gains[:, None] - gains[None, :]) * (discounts[:, None] - discounts[None, :])) / ideal_dcg
+    pair_loss = F.softplus(-(scores[:, None] - scores[None, :]))
+    return (delta_ndcg * pair_loss)[more_relevant].sum()
 
-    model.train()
-    for epoch in range(epochs):
-        total_loss = 0.0
-        for batch_features, batch_labels in loader:
+
+def train(train_pools, validation_pools, feature_count, mean, std, loss_name, epochs, patience,
+          queries_per_step=16, lr=1e-3, weight_decay=1e-4):
+    torch.manual_seed(SEED)
+    model = RerankerNet(feature_count, mean, std)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    trainable = [p for p in train_pools if p.ideal_dcg > 0]
+    rng = random.Random(SEED)
+
+    best_ndcg, best_epoch, best_state = -1.0, 0, None
+    for epoch in range(1, epochs + 1):
+        model.train()
+        rng.shuffle(trainable)
+        total = 0.0
+        for start in range(0, len(trainable), queries_per_step):
             optimizer.zero_grad()
-            predictions = model(batch_features)
-            loss = loss_fn(predictions, batch_labels)
+            batch = trainable[start:start + queries_per_step]
+            loss = 0.0
+            for pool in batch:
+                scores = model(pool.features).squeeze(1)
+                if loss_name == "lambdarank":
+                    loss = loss + lambdarank_loss(scores, pool.grades, pool.ideal_dcg)
+                else:
+                    loss = loss + F.mse_loss(scores, pool.grades, reduction="sum") / len(pool.grades_np)
+            loss = loss / len(batch)
             loss.backward()
             optimizer.step()
-            total_loss += loss.item() * batch_features.size(0)
-        if (epoch + 1) % 20 == 0 or epoch == 0:
-            print(f"  epoch {epoch + 1}/{epochs}: mse={total_loss / len(dataset):.4f}")
+            total += loss.item() * len(batch)
 
+        validation_ndcg = mean_ndcg(model, validation_pools)
+        if validation_ndcg > best_ndcg:
+            best_ndcg, best_epoch = validation_ndcg, epoch
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+        if epoch == 1 or epoch % 10 == 0:
+            print(f"  epoch {epoch:3d}: loss={total / len(trainable):.4f} validation nDCG@10={validation_ndcg:.4f}"
+                  f" (best {best_ndcg:.4f} @ {best_epoch})")
+        if epoch - best_epoch >= patience:
+            print(f"  early stop at epoch {epoch}; best validation nDCG@10 {best_ndcg:.4f} at epoch {best_epoch}")
+            break
+
+    model.load_state_dict(best_state)
     model.eval()
-    return model
+    return model, best_ndcg, best_epoch
 
 
-def export_onnx(model, output_path):
+def permutation_importance(model, pools, feature_names, repeats=5):
+    """Drop in nDCG@10 when one feature's values are shuffled across all candidates."""
+    base = mean_ndcg(model, pools)
+    stacked = torch.cat([p.features for p in pools])
+    sizes = [len(p.grades_np) for p in pools]
+    rng = np.random.default_rng(SEED)
+    drops = {}
+    for j, name in enumerate(feature_names):
+        values = []
+        for _ in range(repeats):
+            shuffled = stacked.clone()
+            shuffled[:, j] = shuffled[rng.permutation(len(shuffled)), j]
+            parts = torch.split(shuffled, sizes)
+            with torch.no_grad():
+                values.append(np.mean([ndcg_at_k(model(x).squeeze(1).numpy(), p) for x, p in zip(parts, pools)]))
+        drops[name] = base - float(np.mean(values))
+    return drops
+
+
+def export_onnx(model, feature_count, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    dummy_input = torch.zeros(1, len(FEATURE_NAMES), dtype=torch.float32)
     torch.onnx.export(
-        model, dummy_input, str(output_path),
+        model, torch.zeros(1, feature_count, dtype=torch.float32), str(output_path),
         input_names=["features"], output_names=["score"],
         dynamic_axes={"features": {0: "batch"}, "score": {0: "batch"}},
         opset_version=17,
@@ -259,60 +228,83 @@ def export_onnx(model, output_path):
 
 
 def verify_export(model, onnx_path, sample_features):
-    """Sanity-checks the exported ONNX model against the in-memory torch model on a few real feature vectors."""
+    """Checks the exported ONNX model against the in-memory torch model on real feature vectors."""
     session = ort.InferenceSession(str(onnx_path))
-    torch_scores = model(torch.from_numpy(sample_features)).detach().numpy().flatten()
+    with torch.no_grad():
+        torch_scores = model(torch.from_numpy(sample_features)).numpy().flatten()
     onnx_scores = session.run(["score"], {"features": sample_features})[0].flatten()
     max_diff = float(np.max(np.abs(torch_scores - onnx_scores)))
-    print(f"  max |torch - onnx| score diff on {len(sample_features)} samples: {max_diff:.6f}")
+    print(f"  max |torch - onnx| score diff on {len(sample_features)} samples: {max_diff:.2e}")
     if max_diff > 1e-4:
         raise RuntimeError(f"ONNX export mismatch too large: {max_diff}")
 
 
 def main():
-    print("Loading WANDS queries + labels...")
-    queries = load_tsv(DATASET_DIR / "query.csv")
-    labels = load_tsv(DATASET_DIR / "label.csv")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--loss", choices=["lambdarank", "mse"], default="lambdarank")
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--patience", type=int, default=40)
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_MODEL_DIR)
+    args = parser.parse_args()
 
-    queries_by_id = {row["query_id"]: row["query"] for row in queries}
-    labels_by_query = {}
-    for row in labels:
-        grade = GRADE_BY_LABEL[row["label"].strip().lower()]
-        labels_by_query.setdefault(row["query_id"], {})[row["product_id"]] = grade
-    print(f"  {len(queries_by_id)} queries, {sum(len(v) for v in labels_by_query.values())} labeled pairs")
+    print(f"Loading {FEATURES_FILE.relative_to(ROOT_DIR)}...")
+    feature_names, pools, split_by_query = load_pools()
 
-    train_query_ids, held_out_query_ids = split_query_ids(queries_by_id.keys())
-    print(f"  split: {len(train_query_ids)} train queries, {len(held_out_query_ids)} held-out queries")
+    expected_train, expected_held_out = split_query_ids({qid for qid in split_by_query})
+    held_out_file = set(HELD_OUT_QUERIES_FILE.read_text().split())
+    exported_held_out = {qid for qid, s in split_by_query.items() if s == "held_out"}
+    if not (held_out_file == exported_held_out == set(expected_held_out)):
+        raise RuntimeError("Held-out split mismatch between query_split.py, the eval resource, and the feature export")
 
-    HELD_OUT_QUERIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    HELD_OUT_QUERIES_FILE.write_text("\n".join(sorted(held_out_query_ids, key=int)) + "\n")
-    print(f"  wrote held-out query ids to {HELD_OUT_QUERIES_FILE.relative_to(ROOT_DIR)}")
+    train_ids = sorted((qid for qid, s in split_by_query.items() if s == "train"), key=int)
+    random.Random(SEED).shuffle(train_ids)
+    validation_count = int(len(train_ids) * VALIDATION_FRACTION)
+    validation_pools = [pools[q] for q in train_ids[:validation_count]]
+    fit_pools = [pools[q] for q in train_ids[validation_count:]]
+    held_out_pools = [pools[q] for q in sorted(exported_held_out, key=int)]
+    print(f"  {len(feature_names)} features; queries: {len(fit_pools)} fit, {len(validation_pools)} validation,"
+          f" {len(held_out_pools)} held-out; {sum(len(p.grades_np) for p in fit_pools)} fit rows")
 
-    print("Loading BGE query embedder...")
-    embedder = QueryEmbedder(EMBEDDING_MODEL_DIR)
+    fit_features = np.concatenate([p.features.numpy() for p in fit_pools])
+    mean = fit_features.mean(axis=0).astype(np.float32)
+    std = fit_features.std(axis=0).astype(np.float32)
+    std[std < 1e-6] = 1.0
 
-    print(f"Collecting training features for {len(train_query_ids)} queries (hits Elasticsearch)...")
-    features, grade_labels = collect_training_data(queries_by_id, labels_by_query, train_query_ids, embedder)
-    print(f"  {features.shape[0]} training examples, {features.shape[1]} features each")
+    print(f"Training ({args.loss})...")
+    model, validation_ndcg, best_epoch = train(fit_pools, validation_pools, len(feature_names), mean, std,
+                                               args.loss, args.epochs, args.patience)
 
-    print("Training MLP...")
-    model = train(features, grade_labels)
+    print("nDCG@10 (pool-only, same formula as the Java eval):")
+    print(f"  validation: hybrid order {hybrid_ndcg(validation_pools):.4f} -> reranked {validation_ndcg:.4f}")
+    held_out_ndcg = mean_ndcg(model, held_out_pools)
+    print(f"  held-out:   hybrid order {hybrid_ndcg(held_out_pools):.4f} -> reranked {held_out_ndcg:.4f}"
+          " (reported only; not used for any choice)")
 
-    onnx_path = OUTPUT_MODEL_DIR / "model.onnx"
-    print(f"Exporting to {onnx_path.relative_to(ROOT_DIR)}...")
-    export_onnx(model, onnx_path)
-    verify_export(model, onnx_path, features[:32])
+    print("Permutation importance on validation queries (nDCG@10 drop):")
+    importance = permutation_importance(model, validation_pools, feature_names)
+    for name, drop in sorted(importance.items(), key=lambda kv: -kv[1]):
+        print(f"  {name:28s} {drop:+.4f}")
 
-    metadata_path = OUTPUT_MODEL_DIR / "training-metadata.json"
+    onnx_path = args.output_dir / "model.onnx"
+    print(f"Exporting to {onnx_path}...")
+    export_onnx(model, len(feature_names), onnx_path)
+    verify_export(model, onnx_path, fit_features[:64])
+
+    metadata_path = args.output_dir / "training-metadata.json"
     metadata_path.write_text(json.dumps({
-        "feature_names": FEATURE_NAMES,
-        "default_average_rating": DEFAULT_AVERAGE_RATING,
-        "train_query_count": len(train_query_ids),
-        "held_out_query_count": len(held_out_query_ids),
-        "training_example_count": int(features.shape[0]),
+        "loss": args.loss,
+        "feature_names": feature_names,
+        "architecture": f"Linear({len(feature_names)}, 32) -> ReLU -> Linear(32, 16) -> ReLU -> Linear(16, 1)",
+        "fit_query_count": len(fit_pools),
+        "validation_query_count": len(validation_pools),
+        "held_out_query_count": len(held_out_pools),
+        "fit_row_count": int(fit_features.shape[0]),
+        "best_epoch": best_epoch,
+        "validation_ndcg_at_10": round(validation_ndcg, 4),
+        "validation_hybrid_ndcg_at_10": round(hybrid_ndcg(validation_pools), 4),
+        "permutation_importance": {k: round(v, 4) for k, v in importance.items()},
     }, indent=2) + "\n")
-    print(f"Wrote {metadata_path.relative_to(ROOT_DIR)}")
-    print("Done.")
+    print(f"Wrote {metadata_path}")
 
 
 if __name__ == "__main__":

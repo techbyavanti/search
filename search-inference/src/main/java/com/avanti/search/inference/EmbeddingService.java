@@ -22,7 +22,7 @@ import java.util.Map;
  * are documented on the model card and easy to get wrong since most sentence-
  * embedding models (e.g. plain sentence-transformers) mean-pool instead.
  */
-public final class EmbeddingService implements AutoCloseable {
+public final class EmbeddingService implements QueryEncoder, AutoCloseable {
 
     public static final int DIMENSIONS = 384;
 
@@ -50,6 +50,7 @@ public final class EmbeddingService implements AutoCloseable {
     }
 
     /** Embeds a search query, applying the asymmetric query instruction prefix BGE was trained with. */
+    @Override
     public float[] embedQuery(String query) {
         return embedBatch(List.of(QUERY_PREFIX + query)).get(0);
     }

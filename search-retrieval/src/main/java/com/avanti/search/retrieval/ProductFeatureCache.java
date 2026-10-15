@@ -15,7 +15,7 @@ import java.util.function.Function;
  * other. The fetch callback is injected rather than taking an
  * ElasticsearchClient directly, so tests can supply a fake without needing
  * a real cluster — production callers pass {@code ids ->
- * ProductLookup.fetchByIds(client, ids)}.
+ * ProductLookup.fetchFeaturesByIds(client, ids)}.
  */
 public final class ProductFeatureCache {
 

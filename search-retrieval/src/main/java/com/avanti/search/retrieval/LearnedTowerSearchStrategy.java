@@ -2,7 +2,7 @@ package com.avanti.search.retrieval;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
-import com.avanti.search.inference.EmbeddingService;
+import com.avanti.search.inference.QueryEncoder;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -22,7 +22,7 @@ import java.util.List;
  * TRAINING.md) — plausibly because two-tower's extra capacity (two
  * independently-trained encoders) is less data-efficient than one shared
  * encoder when fine-tuning on only ~5.4K triplets. So the
- * {@code queryTowerEmbeddingService} wired in here is the shared tower —
+ * {@code queryTowerEncoder} wired in here is the shared tower —
  * the same model/instance used to embed products at ingestion time.
  */
 public final class LearnedTowerSearchStrategy implements SearchStrategy {
@@ -31,16 +31,16 @@ public final class LearnedTowerSearchStrategy implements SearchStrategy {
     private static final int NUM_CANDIDATES_MULTIPLIER = 10;
 
     private final ElasticsearchClient client;
-    private final EmbeddingService queryTowerEmbeddingService;
+    private final QueryEncoder queryTowerEncoder;
 
-    public LearnedTowerSearchStrategy(ElasticsearchClient client, EmbeddingService queryTowerEmbeddingService) {
+    public LearnedTowerSearchStrategy(ElasticsearchClient client, QueryEncoder queryTowerEncoder) {
         this.client = client;
-        this.queryTowerEmbeddingService = queryTowerEmbeddingService;
+        this.queryTowerEncoder = queryTowerEncoder;
     }
 
     @Override
     public List<ScoredResult> search(String query, int topK) {
-        float[] queryEmbedding = queryTowerEmbeddingService.embedQuery(query);
+        float[] queryEmbedding = queryTowerEncoder.embedQuery(query);
         List<Float> queryVector = new ArrayList<>(queryEmbedding.length);
         for (float value : queryEmbedding) {
             queryVector.add(value);

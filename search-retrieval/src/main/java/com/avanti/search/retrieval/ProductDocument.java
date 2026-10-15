@@ -11,6 +11,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * SearchConstants / LexicalSearchStrategy) since that's all a ranking
  * decision needs; ProductLookup deserializes this for the few callers that
  * need product content instead — reranking and the API's display layer.
+ *
+ * <p>{@code embedding} and {@code embeddingHnsw} hold the same vector,
+ * indexed two ways (1-bit BBQ HNSW and tuned float HNSW, see
+ * products-mapping.json), so the two semantic strategies can be compared on
+ * one index.
  */
 public record ProductDocument(
         @JsonProperty("product_id") String productId,
@@ -23,6 +28,7 @@ public record ProductDocument(
         @JsonProperty("average_rating") Double averageRating,
         @JsonProperty("review_count") Integer reviewCount,
         @JsonProperty("embedding") float[] embedding,
+        @JsonProperty("embedding_hnsw") float[] embeddingHnsw,
         @JsonProperty("learned_embedding") float[] learnedEmbedding
 ) {
     public static ProductDocument from(WandsProduct product, float[] embedding) {
@@ -37,6 +43,7 @@ public record ProductDocument(
                 product.averageRating(),
                 product.reviewCount(),
                 embedding,
+                embedding,
                 null
         );
     }
@@ -44,6 +51,6 @@ public record ProductDocument(
     /** Used only by the optional --learned-model-dir ingestion pass (see Track B's tower comparison). */
     public ProductDocument withLearnedEmbedding(float[] learnedEmbedding) {
         return new ProductDocument(productId, productName, productClass, categoryHierarchy, productDescription,
-                productFeatures, ratingCount, averageRating, reviewCount, embedding, learnedEmbedding);
+                productFeatures, ratingCount, averageRating, reviewCount, embedding, embeddingHnsw, learnedEmbedding);
     }
 }

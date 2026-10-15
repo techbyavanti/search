@@ -10,7 +10,14 @@ search:
     neural-reranker-dir: ${SEARCH_MODELS_NEURAL_RERANKER_DIR:models/neural-reranker}
     learned-tower-dir: ${SEARCH_MODELS_LEARNED_TOWER_DIR:models/learned-shared-tower}
   hybrid:
-    rrf-k: 60
+    rrf-k: 40
     candidate-pool-size: 50
   feature-cache:
     max-size: 50000
+  query-embedding-cache:
+    max-size: 10000
+  semantic-hnsw:
+    num-candidates: 500
+  reranker:
+    chunk-size: 5
+    score-cache-max-size: 100000

@@ -19,6 +19,8 @@
       "average_rating":      { "type": "float" },
       "review_count":        { "type": "integer" },
       "embedding":           { "type": "dense_vector", "dims": 384, "index": true, "similarity": "cosine" },
+      "embedding_hnsw":      { "type": "dense_vector", "dims": 384, "index": true, "similarity": "cosine",
+                                "index_options": { "type": "hnsw", "m": 32, "ef_construction": 200 } },
       "learned_embedding":   { "type": "dense_vector", "dims": 384, "index": true, "similarity": "cosine" }
     }
   }

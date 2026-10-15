@@ -26,13 +26,22 @@ class NeuralRerankerServiceTest {
                 "Skipping: run scripts/train-neural-reranker.sh to train the neural reranker model first");
     }
 
-    @Test
-    void scoresAHigherRrfScoreHigherAllElseEqual() throws IOException {
-        try (NeuralRerankerService service = new NeuralRerankerService(MODEL_DIR)) {
-            float[] strongCandidate = {0.05f, 0.9f, 1.0f, 1.0f, 4.5f, 3.0f};
-            float[] weakCandidate = {0.001f, 0.1f, 0.0f, 0.0f, 3.0f, 0.0f};
+    // Order: search-retrieval's RerankFeatureBuilder.FEATURE_NAMES (17 features).
+    private static final float[] STRONG = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.9f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 2.0f, 4.5f, 5.0f, 1.0f};
+    private static final float[] MIDDLE = {0.6f, 0.1f, 0.1f, 0.5f, 0.1f, 0.8f, -0.1f, 0.5f, 0.5f, 0.0f, 0.5f, 0.5f, 0.0f, 2.0f, 4.0f, 2.0f, 1.0f};
+    private static final float[] WEAK = {0.3f, 0.02f, 0.0f, 0.0f, 0.02f, 0.6f, -0.3f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 3.0f, 0.0f, 1.0f};
 
-            List<Float> scores = service.scoreBatch(List.of(strongCandidate, weakCandidate));
+    @Test
+    void reportsTheFeatureCountItWasTrainedOn() throws IOException {
+        try (NeuralRerankerService service = new NeuralRerankerService(MODEL_DIR)) {
+            assertThat(service.featureCount()).isEqualTo(STRONG.length);
+        }
+    }
+
+    @Test
+    void scoresAStrongMatchAboveAWeakOne() throws IOException {
+        try (NeuralRerankerService service = new NeuralRerankerService(MODEL_DIR)) {
+            List<Float> scores = service.scoreBatch(List.of(STRONG, WEAK));
 
             assertThat(scores.get(0)).isGreaterThan(scores.get(1));
         }
@@ -41,10 +50,7 @@ class NeuralRerankerServiceTest {
     @Test
     void scoreBatchReturnsOneScorePerInputVector() throws IOException {
         try (NeuralRerankerService service = new NeuralRerankerService(MODEL_DIR)) {
-            List<Float> scores = service.scoreBatch(List.of(
-                    new float[]{0.03f, 0.5f, 0.5f, 1.0f, 4.0f, 2.0f},
-                    new float[]{0.02f, 0.4f, 0.0f, 0.0f, 4.0f, 1.0f},
-                    new float[]{0.01f, 0.3f, 0.0f, 0.0f, 4.0f, 0.0f}));
+            List<Float> scores = service.scoreBatch(List.of(STRONG, MIDDLE, WEAK));
 
             assertThat(scores).hasSize(3);
         }
