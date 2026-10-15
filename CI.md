@@ -12,10 +12,11 @@ every push/PR:
 - **`sast`** — Semgrep over the Java (and Python training) source itself
   — not just its dependencies — with the `p/java`, `p/security-audit`,
   and `p/secrets` rulesets.
-- **`secret-scan`** — gitleaks against the full commit history, so a
-  credential can't slip in and get baked into an image layer later.
+- **`secret-scan`** — the gitleaks CLI (pinned version, checksum-verified)
+  against the full commit history, so a credential can't slip in and get
+  baked into an image layer later.
 - **`docker-lint`** — hadolint against `search-api/Dockerfile`. The
-  image runs as a numeric non-root `USER 1000:1000`, which works on
+  image runs as a numeric non-root `USER 10001:10001`, which works on
   orchestrators that don't read `/etc/passwd`.
 - **`docker-image-scan`** — builds the real `search-api` runtime image
   and scans it (OS + JRE layer, not just the jar's dependencies) with

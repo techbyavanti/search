@@ -28,7 +28,7 @@
     <onnxruntime.version>1.20.0</onnxruntime.version>
     <djl-tokenizers.version>0.31.1</djl-tokenizers.version>
     <elasticsearch-java.version>9.4.3</elasticsearch-java.version>
-    <jackson.version>2.18.9</jackson.version>
+    <jackson.version>2.21.7</jackson.version>
     <httpclient5.version>5.6.3</httpclient5.version>
     <commons-csv.version>1.11.0</commons-csv.version>
     <commons-math3.version>3.6.1</commons-math3.version>
@@ -37,13 +37,13 @@
          own dependency tree pulls versions with known CVEs (see scripts/scan-cves.sh /
          the cve-scan CI job) that dependencyManagement here overrides. -->
     <httpcore5.version>5.4.3</httpcore5.version>
-    <jackson3.version>3.1.5</jackson3.version>
+    <jackson3.version>3.1.7</jackson3.version>
     <opentelemetry.version>1.62.0</opentelemetry.version>
     <commons-lang3.version>3.18.0</commons-lang3.version>
     <log4j.version>2.26.1</log4j.version>
-    <spring-boot.version>3.5.16</spring-boot.version>
-    <tomcat.version>10.1.59</tomcat.version>
-    <springdoc.version>2.8.17</springdoc.version>
+    <spring-boot.version>4.1.1</spring-boot.version>
+    <tomcat.version>11.0.27</tomcat.version>
+    <springdoc.version>3.1.1</springdoc.version>
     <picocli.version>4.7.6</picocli.version>
     <slf4j.version>2.0.16</slf4j.version>
     <junit.version>5.11.0</junit.version>
@@ -87,10 +87,15 @@
         <artifactId>elasticsearch-java</artifactId>
         <version>${elasticsearch-java.version}</version>
       </dependency>
+      <!-- Jackson BOMs are imported before spring-boot-dependencies, so they win
+           over Spring Boot's managed versions and keep every Jackson module on
+           one patched release (see the cve-scan and docker-image-scan CI jobs). -->
       <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
-        <artifactId>jackson-databind</artifactId>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
         <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
       </dependency>
       <dependency>
         <groupId>org.apache.httpcomponents.client5</groupId>
@@ -108,17 +113,14 @@
         <version>${httpcore5.version}</version>
       </dependency>
 
-      <!-- elasticsearch-java pulls the Jackson 3.x line (new "tools.jackson.core"
-           groupId) internally, independent of the classic 2.x line above. -->
+      <!-- Jackson 3.x ("tools.jackson" groupId): used by Spring Boot 4 and
+           elasticsearch-java, independent of the classic 2.x line above. -->
       <dependency>
-        <groupId>tools.jackson.core</groupId>
-        <artifactId>jackson-core</artifactId>
+        <groupId>tools.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
         <version>${jackson3.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>tools.jackson.core</groupId>
-        <artifactId>jackson-databind</artifactId>
-        <version>${jackson3.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
       </dependency>
 
       <dependency>
@@ -176,11 +178,11 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
-      <!-- spring-boot-dependencies 3.5.16 manages tomcat-embed-* at 10.1.55,
-           which has a CRITICAL security-constraint-bypass CVE (see
-           docker-image-scan CI job). A bare ${tomcat.version} property
-           override doesn't propagate into an imported BOM's own versions,
-           so pin the artifacts directly to the fixed release. -->
+      <!-- Pin tomcat-embed-* above the version spring-boot-dependencies
+           manages, to a release without known CVEs (see the docker-image-scan
+           CI job). A bare ${tomcat.version} property override doesn't
+           propagate into an imported BOM's own versions, so pin the artifacts
+           directly. -->
       <dependency>
         <groupId>org.apache.tomcat.embed</groupId>
         <artifactId>tomcat-embed-core</artifactId>

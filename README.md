@@ -82,7 +82,7 @@ runs the whole stack locally, with a verification step after each stage.
 
 ## Tech stack
 
-Java 26 · Spring Boot 3.5 · Elasticsearch · ONNX Runtime · Hugging Face
+Java 26 · Spring Boot 4.1 · Elasticsearch · ONNX Runtime · Hugging Face
 tokenizers (via DJL) · PyTorch (offline training only) · Maven · Docker
 Compose · GitHub Actions · Trivy · Semgrep · gitleaks · hadolint · Syft
 
