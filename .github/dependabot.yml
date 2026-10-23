@@ -8,10 +8,28 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # Model runtimes change scores (ONNX Runtime kernels, tokenization), so
+      # they come in their own PR: merge it only with a fresh eval run that
+      # regenerates RESULTS.md. Groups match in order, so this one goes first.
+      model-runtime:
+        patterns:
+          - "com.microsoft.onnxruntime:*"
+          - "ai.djl.huggingface:*"
       maven-patch-minor:
         update-types:
           - minor
           - patch
+    ignore:
+      # The Java client must not be newer than the Elasticsearch server
+      # (docker-compose.yml). Upgrade both together, by hand.
+      - dependency-name: "co.elastic.clients:elasticsearch-java"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Jackson follows the minor lines Spring Boot is built against; patch
+      # releases (CVE fixes) still come through.
+      - dependency-name: "com.fasterxml.jackson:jackson-bom"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "tools.jackson:jackson-bom"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     open-pull-requests-limit: 10
 
   - package-ecosystem: docker

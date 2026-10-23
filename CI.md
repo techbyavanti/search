@@ -31,7 +31,10 @@ CI logs — non-blocking, so a SARIF upload hiccup never fails the job.
 Repo-level (not workflow files, so not visible in `.github/`, but part of
 the same posture): **Dependabot version updates** (`.github/dependabot.yml`
 — weekly, covering the Maven reactor, `search-api/Dockerfile`, and the
-Actions workflow itself), plus **Dependabot alerts**, **Dependabot
+Actions workflow itself; ONNX Runtime and the tokenizers arrive in their own
+`model-runtime` PR, to merge only with a fresh eval run, and
+`elasticsearch-java` and Jackson get patch bumps only, so the client stays
+matched to the Elasticsearch server and Jackson to Spring Boot), plus **Dependabot alerts**, **Dependabot
 security updates**, **secret scanning**, and **secret scanning push
 protection** all enabled in repo settings — free for a public repo, and
 the platform-native complement to the gitleaks/Trivy checks above (push
