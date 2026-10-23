@@ -54,12 +54,14 @@ wait_until_up() {
 }
 
 api() {
-  curl -fsS -u "admin:${admin_password}" -X POST "${SONAR_HOST_URL}/api/$1" "${@:2}"
+  curl -sS --fail-with-body -u "admin:${admin_password}" -X POST "${SONAR_HOST_URL}/api/$1" "${@:2}"
 }
 
 configure_server() {
-  admin_password="$(openssl rand -base64 24)"
-  curl -fsS -u "${FACTORY_LOGIN}:${FACTORY_PASSWORD}" -X POST "${SONAR_HOST_URL}/api/users/change_password" \
+  # Random hex plus a fixed suffix, so the password always meets Sonar's policy
+  # (upper case, lower case, digit, and special character).
+  admin_password="$(openssl rand -hex 16)Aa1!"
+  curl -sS --fail-with-body -u "${FACTORY_LOGIN}:${FACTORY_PASSWORD}" -X POST "${SONAR_HOST_URL}/api/users/change_password" \
     --data-urlencode "login=${FACTORY_LOGIN}" --data-urlencode "previousPassword=${FACTORY_PASSWORD}" \
     --data-urlencode "password=${admin_password}"
 
