@@ -77,8 +77,7 @@ public final class RerankerService implements AutoCloseable {
         }
         this.chunkSize = chunkSize;
         this.environment = OrtEnvironment.getEnvironment();
-        try {
-            OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+        try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
             options.setIntraOpNumThreads(1);
             this.session = environment.createSession(modelDir.resolve("model.onnx").toString(), options);
         } catch (ai.onnxruntime.OrtException e) {

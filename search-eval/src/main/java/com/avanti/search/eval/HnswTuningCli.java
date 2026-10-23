@@ -123,6 +123,7 @@ public final class HnswTuningCli implements Callable<Integer> {
                     long p50Micros, long p95Micros, long buildMillis, long sizeBytes) {
     }
 
+    @SuppressWarnings("java:S6218") // identity equality is intended: never compared, hashed, or printed, and value equality over vectors would be costly
     private record EncodedQuery(WandsQuery query, float[] vector, List<String> exactTopK) {
     }
 

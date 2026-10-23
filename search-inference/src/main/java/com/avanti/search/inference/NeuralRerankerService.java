@@ -32,8 +32,8 @@ public final class NeuralRerankerService implements AutoCloseable {
 
     public NeuralRerankerService(Path modelDir) throws IOException {
         this.environment = OrtEnvironment.getEnvironment();
-        try {
-            this.session = environment.createSession(modelDir.resolve("model.onnx").toString(), new OrtSession.SessionOptions());
+        try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
+            this.session = environment.createSession(modelDir.resolve("model.onnx").toString(), options);
             long[] inputShape = ((TensorInfo) session.getInputInfo().get(INPUT_NAME).getInfo()).getShape();
             this.featureCount = (int) inputShape[1];
         } catch (ai.onnxruntime.OrtException e) {

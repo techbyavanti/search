@@ -36,8 +36,8 @@ public final class EmbeddingService implements QueryEncoder, AutoCloseable {
 
     public EmbeddingService(Path modelDir) throws IOException {
         this.environment = OrtEnvironment.getEnvironment();
-        try {
-            this.session = environment.createSession(modelDir.resolve("model.onnx").toString(), new OrtSession.SessionOptions());
+        try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
+            this.session = environment.createSession(modelDir.resolve("model.onnx").toString(), options);
         } catch (ai.onnxruntime.OrtException e) {
             throw new IOException("Failed to load ONNX model from " + modelDir, e);
         }

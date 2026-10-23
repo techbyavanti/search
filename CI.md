@@ -1,14 +1,22 @@
 # CI & security posture
 
-One GitHub Actions workflow, `.github/workflows/build.yml`, six jobs on
+One GitHub Actions workflow, `.github/workflows/build.yml`, seven jobs on
 every push/PR:
 
 - **`test`** — `mvn test`. Fast, needs no Elasticsearch or models (the
   tests that do need them skip gracefully via `Assumptions.assumeTrue`
   when those aren't present).
-- **`cve-scan`** — Trivy against every module's resolved `pom.xml`
-  dependency tree (SCA), failing on CRITICAL/HIGH/MEDIUM known CVEs.
-  Reproduce locally with `./scripts/scan-cves.sh`.
+- **`sonarqube`** — SonarQube Community analysis with JaCoCo test
+  coverage, against a throwaway SonarQube service container (no account or
+  token). The quality gate covers the whole codebase, not only new code:
+  A ratings for reliability, security, and maintainability, every security
+  hotspot reviewed, coverage ≥ 35% (raise the floor as tests are added), and
+  ≤ 3% duplicated lines. Reproduce locally with `./scripts/sonar-scan.sh`
+  (`--keep` leaves the dashboard running on port 9001).
+- **`cve-scan`** — Trivy over the repo: every module's resolved `pom.xml`
+  dependency tree (SCA), the Dockerfile (misconfigurations), and committed
+  secrets, failing on CRITICAL/HIGH/MEDIUM findings. Reproduce locally with
+  `./scripts/scan-cves.sh`.
 - **`sast`** — Semgrep over the Java (and Python training) source itself
   — not just its dependencies — with the `p/java`, `p/security-audit`,
   and `p/secrets` rulesets.
@@ -17,10 +25,12 @@ every push/PR:
   baked into an image layer later.
 - **`docker-lint`** — hadolint against `search-api/Dockerfile`. The
   image runs as a numeric non-root `USER 10001:10001`, which works on
-  orchestrators that don't read `/etc/passwd`.
+  orchestrators that don't read `/etc/passwd`, and has a `HEALTHCHECK` on
+  Actuator's `/actuator/health` (the only Actuator endpoint exposed).
 - **`docker-image-scan`** — builds the real `search-api` runtime image
-  and scans it (OS + JRE layer, not just the jar's dependencies) with
-  Trivy, plus generates a CycloneDX SBOM as a build artifact via Syft.
+  and scans it (OS + JRE layer, not just the jar's dependencies, plus
+  secrets baked into layers) with Trivy, plus generates a CycloneDX SBOM
+  as a build artifact via Syft.
 
 `cve-scan`, `sast`, and `docker-image-scan` each run their scanner twice:
 once in the format that gates the job (`table` + `exit-code: 1`), once as

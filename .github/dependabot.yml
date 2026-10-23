@@ -10,7 +10,7 @@ updates:
     groups:
       # Model runtimes change scores (ONNX Runtime kernels, tokenization), so
       # they come in their own PR: merge it only with a fresh eval run that
-      # regenerates RESULTS.md. Groups match in order, so this one goes first.
+      # regenerates RESULTS.md. They are excluded from maven-patch-minor below.
       model-runtime:
         patterns:
           - "com.microsoft.onnxruntime:*"
@@ -19,6 +19,9 @@ updates:
         update-types:
           - minor
           - patch
+        exclude-patterns:
+          - "com.microsoft.onnxruntime:*"
+          - "ai.djl.huggingface:*"
     ignore:
       # The Java client must not be newer than the Elasticsearch server
       # (docker-compose.yml). Upgrade both together, by hand.

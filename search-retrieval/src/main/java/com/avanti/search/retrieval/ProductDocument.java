@@ -17,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * products-mapping.json), so the two semantic strategies can be compared on
  * one index.
  */
+@SuppressWarnings("java:S6218") // identity equality is intended: never compared, hashed, or printed, and value equality over vectors would be costly
 public record ProductDocument(
         @JsonProperty("product_id") String productId,
         @JsonProperty("product_name") String productName,

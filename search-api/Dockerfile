@@ -28,4 +28,9 @@ COPY --from=build /workspace/search-api/target/search-api.jar app.jar
 RUN chown search:search /app/app.jar
 USER 10001:10001
 EXPOSE 8080
+# The JRE image has no curl or wget, so probe Actuator's health endpoint with
+# bash's /dev/tcp instead of adding packages. Startup loads the ONNX models,
+# hence the start period.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /actuator/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"status\":\"UP\"' <&3"]
 ENTRYPOINT ["java", "-jar", "app.jar"]

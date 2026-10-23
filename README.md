@@ -84,7 +84,8 @@ runs the whole stack locally, with a verification step after each stage.
 
 Java 26 · Spring Boot 4.1 · Elasticsearch · ONNX Runtime · Hugging Face
 tokenizers (via DJL) · PyTorch (offline training only) · Maven · Docker
-Compose · GitHub Actions · Trivy · Semgrep · gitleaks · hadolint · Syft
+Compose · GitHub Actions · SonarQube · JaCoCo · Trivy · Semgrep · gitleaks ·
+hadolint · Syft
 
 ## Docs
 

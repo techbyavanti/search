@@ -6,6 +6,7 @@ package com.avanti.search.retrieval;
  * (EmbeddingTextBuilder), cached by {@link ProductFeatureCache} so repeat
  * requests for the same product don't refetch it from Elasticsearch.
  */
+@SuppressWarnings("java:S6218") // identity equality is intended: never compared, hashed, or printed, and value equality over vectors would be costly
 public record CachedProductFeatures(
         String productId,
         float[] embedding,

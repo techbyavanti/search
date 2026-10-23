@@ -38,6 +38,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -49,6 +50,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.stream.Collectors;
 
 /**
  * Runs every currently-implemented SearchStrategy against all 480 WANDS
@@ -389,11 +391,15 @@ public class EvalCli implements Callable<Integer> {
         log.info("Wrote RRF sweep results to {}", path);
     }
 
+    /** "Hybrid (RRF, k=40)" becomes "hybrid-rrf-k-40": lowercase alphanumeric runs joined by "-". */
+    static String fileSlug(String name) {
+        return Arrays.stream(name.toLowerCase(Locale.ROOT).split("[^a-z0-9]+"))
+                .filter(part -> !part.isEmpty())
+                .collect(Collectors.joining("-"));
+    }
+
     private void writePerQueryCsv(String strategyName, List<QueryMetrics> perQuery) throws IOException {
-        String fileName = strategyName.toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9]+", "-")
-                .replaceAll("(^-|-$)", "") + ".csv";
-        Path path = resultsDir.resolve(fileName);
+        Path path = resultsDir.resolve(fileSlug(strategyName) + ".csv");
 
         CSVFormat format = CSVFormat.Builder.create(CSVFormat.DEFAULT)
                 .setHeader("query_id", "ndcg_at_10", "mrr", "recall_at_10", "recall_at_50", "precision_at_10")

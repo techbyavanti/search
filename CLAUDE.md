@@ -26,6 +26,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [HOWTO.md](HOWTO.md), and
 ```bash
 export JAVA_HOME="/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home"
 mvn -q test                          # all tests; model-dependent tests skip when models/ is empty
+./scripts/sonar-scan.sh              # SonarQube quality gate (throwaway server on :9001; --keep to browse)
+./scripts/scan-cves.sh               # Trivy: dependency CVEs, Dockerfile misconfigurations, secrets
 mvn -q package -DskipTests           # build all jars
 ./scripts/run-eval.sh --baseline-file ci/eval-baseline.json   # full eval; rewrites RESULTS.md and results/
 ./scripts/train-neural-reranker.sh   # export features (Java), then train (Python)
@@ -101,6 +103,23 @@ used by another service on this machine.
 - Verify every ONNX export against the PyTorch output.
 - Report negative results honestly, with the likely cause.
 
+### Static analysis
+
+- The SonarQube quality gate (`scripts/sonar-scan.sh`, CI job `sonarqube`)
+  must pass: A ratings for reliability, security, and maintainability,
+  hotspots reviewed, coverage at or above the floor, ≤ 3% duplication.
+  Run it before pushing a non-trivial change.
+- Fix the finding; do not lower the gate. Suppress a rule only when the
+  finding is a deliberate design choice, with
+  `@SuppressWarnings("java:Sxxxx") // reason` on the narrowest element.
+- When coverage rises, raise `COVERAGE_FLOOR` in `scripts/sonar-scan.sh`
+  and the number in `CI.md`.
+- Trivy (`scripts/scan-cves.sh`) must report no CRITICAL, HIGH, or MEDIUM
+  vulnerability, misconfiguration, or secret.
+- Close every `AutoCloseable` (ONNX `SessionOptions`, tensors, results)
+  with try-with-resources. Avoid regexes that backtrack on long input;
+  prefer a split or a single pass.
+
 ### Tests
 
 - JUnit 5 and AssertJ. One behavior per test; the test name states it.
@@ -130,7 +149,7 @@ describe the new behavior. In the same change:
    | Any ranking, model, or metric change | `README.md`, `ARCHITECTURE.md` (text and Mermaid diagrams), `RESULTS.md` (regenerate with the eval, do not hand-edit), `docs/index.html` |
    | Training or features | `TRAINING.md`, `HOWTO.md`, `training/requirements.txt` |
    | Setup, scripts, or config | `HOWTO.md`, `README.md`, `.idea/runConfigurations/` |
-   | CI or regression floors | `CI.md`, `ci/eval-baseline.json` (entries are matched by position, in `EvalCli` order) |
+   | CI or regression floors | `CI.md`, `ci/eval-baseline.json` (entries are matched by position, in `EvalCli` order), `COVERAGE_FLOOR` in `scripts/sonar-scan.sh` |
    | Index mapping or vector settings | `products-mapping.json`, `HOWTO.md` step 3, `ARCHITECTURE.md` (HNSW tuning), rerun `HnswTuningCli`; retrain the neural reranker if Hybrid's pools change |
    | Demo results | Recapture `docs/data/` (`scripts/capture-demo-snapshots.sh`, then `scripts/extract-product-details.py`) and re-embed both data blocks in `docs/index.html` |
 
