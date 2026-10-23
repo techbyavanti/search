@@ -13,8 +13,8 @@ set -euo pipefail
 # Sonar's default gate checks only new code, which is empty on a fresh server,
 # so this script sets its own gate on overall code: A ratings for reliability,
 # security, and maintainability, every security hotspot reviewed, coverage at
-# or above COVERAGE_FLOOR (default 35; raise it as tests are added), and at
-# most 3% duplicated lines.
+# or above COVERAGE_FLOOR (default 26, measured without models/ as in CI;
+# raise it as tests are added), and at most 3% duplicated lines.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
@@ -23,7 +23,7 @@ SONAR_IMAGE="sonarqube:26.10.0.133078-community"
 CONTAINER_NAME="search-sonarqube"
 LOCAL_PORT=9001
 GATE_NAME="search-overall"
-COVERAGE_FLOOR="${COVERAGE_FLOOR:-35}"
+COVERAGE_FLOOR="${COVERAGE_FLOOR:-26}"
 MAX_DUPLICATED_LINES_PERCENT=3
 STARTUP_TIMEOUT_SECONDS=300
 # SonarQube's documented first-start login, replaced with a random password below.
@@ -89,9 +89,20 @@ fi
 wait_until_up
 configure_server
 
-SONAR_TOKEN="${sonar_token}" mvn -B verify sonar:sonar \
+print_gate_conditions() {
+  curl -fsS -u "admin:${admin_password}" "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=search" |
+    python3 -c 'import json, sys
+for c in json.load(sys.stdin)["projectStatus"]["conditions"]:
+    print("%-6s %s: %s (fails when %s %s)" % (c["status"], c["metricKey"], c.get("actualValue", "-"), c["comparator"], c["errorThreshold"]))' >&2
+}
+
+if ! SONAR_TOKEN="${sonar_token}" mvn -B verify sonar:sonar \
   -Dsonar.host.url="${SONAR_HOST_URL}" \
-  -Dsonar.qualitygate.wait=true
+  -Dsonar.qualitygate.wait=true; then
+  echo "Quality gate conditions:" >&2
+  print_gate_conditions || true
+  exit 1
+fi
 
 echo "Quality gate passed: ${SONAR_HOST_URL}/dashboard?id=search"
 if [[ "${keep_server}" == true ]]; then

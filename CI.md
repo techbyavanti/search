@@ -10,9 +10,12 @@ every push/PR:
   coverage, against a throwaway SonarQube service container (no account or
   token). The quality gate covers the whole codebase, not only new code:
   A ratings for reliability, security, and maintainability, every security
-  hotspot reviewed, coverage ≥ 35% (raise the floor as tests are added), and
-  ≤ 3% duplicated lines. Reproduce locally with `./scripts/sonar-scan.sh`
-  (`--keep` leaves the dashboard running on port 9001).
+  hotspot reviewed, coverage ≥ 26% (raise the floor as tests are added), and
+  ≤ 3% duplicated lines. CI has no `models/`, so the ONNX model tests skip
+  and their code counts as uncovered; with models present, local coverage is
+  about 10 points higher. Reproduce locally with `./scripts/sonar-scan.sh`
+  (`--keep` leaves the dashboard running on port 9001); on a gate failure it
+  prints each condition with its actual value.
 - **`cve-scan`** — Trivy over the repo: every module's resolved `pom.xml`
   dependency tree (SCA), the Dockerfile (misconfigurations), and committed
   secrets, failing on CRITICAL/HIGH/MEDIUM findings. Reproduce locally with
