@@ -154,7 +154,7 @@ jobs:
           category: trivy-image
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@v0.24.3
         with:
           image: search-api:${{ github.sha }}
           format: cyclonedx-json
