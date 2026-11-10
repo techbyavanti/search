@@ -275,7 +275,7 @@ you deliberately commit that subfolder — see the repo's `.gitignore`):
 | 4 | Train neural reranker | `scripts/train-neural-reranker.sh` — required before `search-api` will start |
 | 5 | Train embedding tower | `scripts/train-embedding-tower.sh shared` — also required before `search-api` will start |
 | 6 | Run eval (vs CI baseline) | `scripts/run-eval.sh --baseline-file ci/eval-baseline.json` |
-| 7 | Capture demo snapshots | `scripts/capture-demo-snapshots.sh` — hits a running `search-api` to regenerate the GitHub Pages demo data |
+| 7 | Capture demo snapshots | `scripts/capture-demo-snapshots.sh` — hits a running `search-api` to regenerate the GitHub Pages demo data, collapsing same-named listings so each strategy shows distinct product names |
 | 8 | search-api (app) | `SearchApiApplication.main` directly, no jar build |
 | 9 | Wait for search-api :8080 | `scripts/wait-for-search-api.sh` — polls until the app responds |
 | 10 | search-api (start + wait until ready) | Compound: runs 8 + 9 together |
