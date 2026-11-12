@@ -25,8 +25,8 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>26</maven.compiler.release>
 
-    <onnxruntime.version>1.20.0</onnxruntime.version>
-    <djl-tokenizers.version>0.31.1</djl-tokenizers.version>
+    <onnxruntime.version>1.31.1</onnxruntime.version>
+    <djl-tokenizers.version>0.40.0</djl-tokenizers.version>
     <elasticsearch-java.version>9.4.3</elasticsearch-java.version>
     <jackson.version>2.21.7</jackson.version>
     <httpclient5.version>5.6.3</httpclient5.version>
